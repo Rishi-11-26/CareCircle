@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     role TEXT NOT NULL DEFAULT 'elderly' CHECK (role IN ('elderly', 'family', 'caretaker')),
     avatar_url TEXT,
     emergency_contact TEXT,
-    timezone TEXT NOT NULL DEFAULT 'UTC',
+    timezone TEXT NOT NULL CHECK (timezone IS NOT NULL AND length(trim(timezone)) > 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -351,16 +351,20 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    -- 1. Strictly reject ANY attempt to DELETE dose log records
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Dose logs are immutable medical audit records and cannot be deleted.';
     END IF;
 
+    -- 2. Strictly reject ANY attempt to UPDATE confirmed dose log records
     IF TG_OP = 'UPDATE' THEN
-        -- Confirmed dose events (taken or skipped) cannot be updated at all, ever (including is_corrected or updated_at)
+        -- Confirmed dose events (taken or skipped) cannot be updated at all, ever (including is_corrected, updated_at, notes, or status)
         IF OLD.status IN ('taken', 'skipped') THEN
-            RAISE EXCEPTION 'Confirmed dose events are immutable audit records and cannot be modified. Record an append-only correction instead.';
+            RAISE EXCEPTION 'Confirmed dose events (status: %) are immutable audit records and cannot be modified or updated in place. Record an append-only correction instead.', OLD.status;
         END IF;
 
+        -- For preliminary/unconfirmed entries (scheduled, due, unconfirmed), preserve confirmation transition
+        -- but strictly prohibit tampering with core schedule and profile identity attributes
         IF NEW.scheduled_date <> OLD.scheduled_date OR
            NEW.scheduled_time <> OLD.scheduled_time OR
            NEW.medication_id <> OLD.medication_id OR

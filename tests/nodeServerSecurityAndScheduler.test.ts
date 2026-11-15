@@ -231,7 +231,7 @@ describe('Node Server Security, Scheduler Concurrency & Endpoint Hardening Test 
           email TEXT NOT NULL,
           full_name TEXT NOT NULL,
           role TEXT NOT NULL DEFAULT 'elderly',
-          timezone TEXT NOT NULL DEFAULT 'UTC'
+          timezone TEXT NOT NULL CHECK (length(trim(timezone)) > 0)
         );
 
         CREATE TABLE care_profiles (

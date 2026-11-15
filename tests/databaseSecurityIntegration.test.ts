@@ -311,4 +311,70 @@ describe('Database Security & Immutability Integration Test Suite (pg-mem Postgr
     // 8. Elderly self in independent is allowed
     expect(validateDoseSource('self', 'owner', 'independent').valid).toBe(true);
   });
+
+  it('allows confirmation transition on preliminary dose records but prevents core attribute alteration', () => {
+    const db = newDb();
+
+    db.public.none(`
+      CREATE TABLE dose_logs (
+        id TEXT PRIMARY KEY,
+        care_profile_id TEXT NOT NULL,
+        medication_id TEXT NOT NULL,
+        dose_identity TEXT NOT NULL,
+        scheduled_date TEXT NOT NULL,
+        scheduled_time TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source TEXT NOT NULL,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    const table: any = db.public.getTable('dose_logs');
+    table.onBeforeChange(['status', 'notes', 'scheduled_date', 'scheduled_time', 'medication_id', 'care_profile_id', 'dose_identity'], (oldRecord: any, newRecord: any) => {
+      if (oldRecord && !newRecord) {
+        throw new Error('Dose logs are immutable medical audit records and cannot be deleted.');
+      }
+      if (oldRecord && newRecord && (oldRecord.status === 'taken' || oldRecord.status === 'skipped')) {
+        throw new Error(`Confirmed dose events (status: ${oldRecord.status}) are immutable audit records and cannot be modified or updated in place. Record an append-only correction instead.`);
+      }
+      if (oldRecord && newRecord && oldRecord.status !== 'taken' && oldRecord.status !== 'skipped') {
+        if (
+          newRecord.scheduled_date !== oldRecord.scheduled_date ||
+          newRecord.scheduled_time !== oldRecord.scheduled_time ||
+          newRecord.medication_id !== oldRecord.medication_id ||
+          newRecord.care_profile_id !== oldRecord.care_profile_id ||
+          newRecord.dose_identity !== oldRecord.dose_identity
+        ) {
+          throw new Error('Core schedule identity attributes of a dose record cannot be modified.');
+        }
+      }
+    });
+
+    // 1. Insert preliminary scheduled dose
+    db.public.none(`
+      INSERT INTO dose_logs (id, care_profile_id, medication_id, dose_identity, scheduled_date, scheduled_time, status, source)
+      VALUES ('dose_prelim_1', 'profile_margaret', 'med_lisinopril', 'dose_lisinopril_0800', '2026-03-01', '08:00', 'scheduled', 'system');
+    `);
+
+    // 2. Modifying core identity attribute (e.g. scheduled_date) on preliminary record MUST FAIL
+    expect(() => {
+      db.public.none("UPDATE dose_logs SET scheduled_date = '2026-03-02' WHERE id = 'dose_prelim_1';");
+    }).toThrow(/Core schedule identity attributes/i);
+
+    // 3. Confirming the preliminary dose (scheduled -> taken) MUST SUCCEED
+    db.public.none("UPDATE dose_logs SET status = 'taken', source = 'self' WHERE id = 'dose_prelim_1';");
+    const confirmed = db.public.many("SELECT * FROM dose_logs WHERE id = 'dose_prelim_1'");
+    expect(confirmed[0].status).toBe('taken');
+    expect(confirmed[0].source).toBe('self');
+
+    // 4. Now that it is confirmed as 'taken', ANY subsequent UPDATE MUST FAIL
+    expect(() => {
+      db.public.none("UPDATE dose_logs SET status = 'skipped' WHERE id = 'dose_prelim_1';");
+    }).toThrow(/Confirmed dose events \(status: taken\) are immutable/i);
+
+    expect(() => {
+      db.public.none("UPDATE dose_logs SET notes = 'late note' WHERE id = 'dose_prelim_1';");
+    }).toThrow(/Confirmed dose events \(status: taken\) are immutable/i);
+  });
 });

@@ -7,7 +7,7 @@
 ALTER TABLE public.care_profiles
     ADD COLUMN IF NOT EXISTS assistance_level TEXT NOT NULL DEFAULT 'independent'
         CHECK (assistance_level IN ('independent', 'needs_assistance', 'caregiver_managed')),
-    ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
+    ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL CHECK (timezone IS NOT NULL AND length(trim(timezone)) > 0);
 
 -- 2. Extend dose_logs with Provenance, Concrete Timestamps, Follow-up State & Append-Only Corrections
 ALTER TABLE public.dose_logs

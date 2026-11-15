@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     role TEXT NOT NULL CHECK (role IN ('elderly', 'family', 'caretaker')),
     avatar_url TEXT,
     emergency_contact TEXT,
-    timezone TEXT DEFAULT 'UTC',
+    timezone TEXT NOT NULL CHECK (timezone IS NOT NULL AND length(trim(timezone)) > 0),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

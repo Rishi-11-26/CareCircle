@@ -16,7 +16,7 @@
 - **Direct Commit URL:** [https://github.com/Rishi-11-26/CareCircle/commit/ed6af1ccf1aa4ca315ea29e27cd0a32e66ee1df1](https://github.com/Rishi-11-26/CareCircle/commit/ed6af1ccf1aa4ca315ea29e27cd0a32e66ee1df1)
 - **Working Tree State:** Clean; all recent security remediations committed and pushed to `origin/main`.
 - **Secret Scan:** Verified clean. Zero live JWTs, service role keys, or Resend credentials exist in tracked files or commit history (`.env` is gitignored; only `.env.example` template is tracked).
-- **Documentation Alignment:** `README.md` and `FINAL_ENGINEERING_REPORT.md` reflect actual code implementation and 64 passing tests across 12 suites.
+- **Documentation Alignment:** `README.md` and `FINAL_ENGINEERING_REPORT.md` reflect actual code implementation and 65 passing tests across 12 suites.
 
 ---
 
@@ -36,7 +36,8 @@
 - **Search Path Hardening:** All `SECURITY DEFINER` functions specify `SET search_path = public, extensions, pg_temp` to prevent search-path injection.
 
 ### C. Dose History & Immutability
-- **Confirmed Event Immutability:** Trigger `trg_dose_logs_immutability` strictly blocks `UPDATE` or `DELETE` on confirmed records (`status IN ('taken', 'skipped')`).
+- **Confirmed Event Immutability:** Trigger `trg_dose_logs_immutability` executes `enforce_dose_log_immutability()`, which unconditionally rejects EVERY `UPDATE` and `DELETE` on confirmed records (`status IN ('taken', 'skipped')`). No confirmed field (notes, timestamps, status, is_corrected) can be mutated in place.
+- **Preliminary Event Confirmation:** For preliminary/unconfirmed logs (`scheduled`, `due`, `unconfirmed`), transitions to confirmed status (`taken`, `skipped`) during dose confirmation are permitted, while altering core schedule attributes (`scheduled_date`, `scheduled_time`, `medication_id`, `care_profile_id`, `dose_identity`) is strictly rejected.
 - **Append-Only Corrections:** In `record_dose_event`, target confirmed records are **NEVER modified**. Corrections are inserted as new events with `correction_of_id` linking to the original event.
 - **Duplicate Correction Defense:** Enforced at the storage level by unique partial index `uq_dose_logs_single_correction ON dose_logs (correction_of_id) WHERE (correction_of_id IS NOT NULL)`.
 - **Effective State Projection:** View `v_effective_dose_logs` accurately resolves current effective states using window functions (`PARTITION BY COALESCE(correction_of_id, id) ORDER BY created_at DESC`).
@@ -47,8 +48,8 @@
 - **Passcode Hashing:** Uses high-entropy Web Crypto generation (>30 bits) and SHA-256 storage. Plaintext passcodes are never stored.
 
 ### E. Timezone Handling
-- **Zero Hardcoded Timezones:** Removed all `'America/Los_Angeles'` defaults.
-- **Mandatory Profile Timezone:** `care_profiles.timezone` enforces `NOT NULL CHECK (length(trim(timezone)) > 0)`.
+- **Zero Hardcoded Timezone Defaults:** Removed all `'America/Los_Angeles'` and `'UTC'` defaults across `profiles`, `care_profiles`, RPCs, and client components.
+- **Mandatory Profile Timezone:** Both `profiles.timezone` and `care_profiles.timezone` enforce `TEXT NOT NULL CHECK (timezone IS NOT NULL AND length(trim(timezone)) > 0)`.
 - **DST-Safe Conversion:** Client and server use fixed-point iterative timezone conversion (`getUtcInstantForProfileWallClock`) to prevent wall-clock shifts across Daylight Saving Time boundaries.
 
 ### F. Notification Integrity
@@ -118,15 +119,15 @@
 Tests were executed using Vitest 3.2.7 and are classified as follows:
 - **Unit & Logic Tests (Vitest):** `tests/crypto.test.ts` (4), `tests/timezoneAndScheduling.test.ts` (9), `tests/analytics.test.ts` (2), `tests/careIntelligence.test.ts` (3), `tests/sanity.test.ts` (1).
 - **Mocked Component & Workflow Tests (JSDOM / React Testing Library):** `tests/workflows.test.tsx` (9), `tests/roleNavigationAndAccessibility.test.tsx` (9).
-- **In-Memory SQL Engine Tests (pg-mem):** `tests/databaseSecurityIntegration.test.ts` (6), `tests/assistedCareAndIntegrity.test.ts` (5), `tests/securityRemediation.test.ts` (8), `tests/storageAdapter.test.ts` (5), `tests/nodeServerSecurityAndScheduler.test.ts` (8).
+- **In-Memory SQL Engine Tests (pg-mem):** `tests/databaseSecurityIntegration.test.ts` (7), `tests/assistedCareAndIntegrity.test.ts` (5), `tests/securityRemediation.test.ts` (8), `tests/storageAdapter.test.ts` (5), `tests/nodeServerSecurityAndScheduler.test.ts` (8).
   *(Note: `pg-mem` is an in-memory SQL mock and parser engine used for local verification of schema constraints, immutability triggers, and index uniqueness. It does not replace live PostgreSQL testing).*
 - **Live Supabase Integration Tests:** NOT EXECUTED (Per strict instruction, no direct execution against the live Supabase project was performed).
 
 ### Summary Output
 ```
  Test Files  12 passed (12)
-      Tests  64 passed (64)
-   Duration  18.18s
+      Tests  65 passed (65)
+   Duration  14.70s
 ```
 
 ### Production Build Verification
