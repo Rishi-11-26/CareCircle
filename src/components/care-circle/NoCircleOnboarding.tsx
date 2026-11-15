@@ -339,8 +339,11 @@ export const NoCircleOnboarding: React.FC = () => {
             <button
               type="button"
               onClick={() => {
+                localStorage.setItem('carecircle_demo_mode', 'true');
+                localStorage.setItem('carecircle_selected_profile_id', 'profile_margaret');
                 setDemoMode(true);
                 window.location.href = '/';
+                window.location.reload();
               }}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-forest bg-forest/5 hover:bg-forest/10 border border-forest/20 transition-all cursor-pointer"
             >

@@ -23,7 +23,8 @@ export const AuthRouteGuard: React.FC<{ children: React.ReactNode }> = ({ childr
   }
 
   // If user is authenticated in real production mode (not demo mode) but has not yet joined or created any care circle
-  if (!isDemoMode && !isLoading && (!careProfile || careProfiles.length === 0)) {
+  const isDemo = isDemoMode || (typeof window !== 'undefined' && localStorage.getItem('carecircle_demo_mode') === 'true');
+  if (!isDemo && !isLoading && (!careProfile || careProfiles.length === 0)) {
     return <NoCircleOnboarding />;
   }
 

@@ -366,6 +366,11 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const newUser = dataService.getCurrentUser() || dataService.switchUserRole('elderly');
       setCurrentUser(newUser);
       localStorage.setItem('carecircle_selected_profile_id', 'profile_margaret');
+      const initial = dataService.getInitialCareProfile();
+      if (initial) {
+        setCareProfile(initial);
+        setCareProfiles([initial]);
+      }
     }
     refreshData();
   };
