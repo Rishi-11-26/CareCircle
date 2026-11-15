@@ -31,7 +31,7 @@ export const Navbar: React.FC = () => {
   const location = useLocation();
 
   const isElderly = currentUser.role === 'elderly';
-  const personName = careProfile?.preferred_name || careProfile?.full_name?.split(' ')[0] || 'Margaret';
+  const personName = currentUser?.full_name?.split(' ')[0] || careProfile?.preferred_name || careProfile?.full_name?.split(' ')[0] || 'Member';
   const rawPhone = careProfile?.emergency_phone?.trim();
   const sanitizedPhone = rawPhone ? rawPhone.replace(/[^\d+]/g, '') : '';
   const hasValidPhone = Boolean(sanitizedPhone && sanitizedPhone.length >= 7);
@@ -116,12 +116,12 @@ export const Navbar: React.FC = () => {
             {isAuthenticated && (
               <button
                 onClick={() => signOut()}
-                className="hidden sm:inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-stone bg-white hover:bg-stone text-xs font-bold text-charcoal-muted hover:text-terracotta transition-all cursor-pointer min-h-[48px] touch-target-elderly"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-stone bg-white hover:bg-stone text-xs font-bold text-charcoal-muted hover:text-terracotta transition-all cursor-pointer min-h-[44px] touch-target-elderly"
                 title="Sign Out"
                 aria-label="Sign Out"
               >
                 <LogOut className="w-4 h-4" />
-                <span>Sign Out</span>
+                <span className="hidden xs:inline">Sign Out</span>
               </button>
             )}
 
@@ -304,7 +304,7 @@ export const Navbar: React.FC = () => {
             {isAuthenticated && (
               <button
                 onClick={() => signOut()}
-                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md font-medium text-charcoal-muted hover:text-terracotta hover:bg-white border border-transparent hover:border-stone transition-all cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-bold text-charcoal-muted hover:text-terracotta bg-white hover:bg-stone-light border border-stone transition-all cursor-pointer shadow-warm-xs"
                 title="Sign Out"
               >
                 <LogOut className="w-3.5 h-3.5" />

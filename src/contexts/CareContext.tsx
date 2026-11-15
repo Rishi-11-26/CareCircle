@@ -190,11 +190,14 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setCurrentUser(profile);
         dataService.setCurrentUser(profile);
       } else {
+        const { data: authData } = (await supabase?.auth.getUser()) || { data: { user: null } };
+        const meta = authData?.user?.user_metadata;
         const fallbackProfile: UserProfile = {
           id: userId,
           email: email || '',
-          full_name: email?.split('@')[0] || 'CareCircle User',
-          role: 'family',
+          full_name: meta?.full_name || email?.split('@')[0] || 'CareCircle User',
+          role: (meta?.role as UserRole) || 'family',
+          timezone: meta?.timezone || 'America/Los_Angeles',
           created_at: new Date().toISOString(),
         };
         setCurrentUser(fallbackProfile);
@@ -377,11 +380,24 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }) => {
     setIsLoading(true);
     try {
+      setIsDemoMode(false);
+      localStorage.removeItem('carecircle_demo_mode');
+      dataService.setDemoMode(false);
+
       const res = await signUpUser(params);
       if (res.user) {
         setAuthUser(res.user);
         setSession(res.session);
-        await loadUserProfile(res.user.id, params.email);
+        const newProfile: UserProfile = {
+          id: res.user.id,
+          email: params.email,
+          full_name: params.fullName,
+          role: params.role,
+          timezone: params.timezone,
+          created_at: new Date().toISOString(),
+        };
+        setCurrentUser(newProfile);
+        dataService.setCurrentUser(newProfile);
         await refreshData();
       }
       return { user: res.user, error: res.error };
@@ -393,6 +409,10 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signIn = async (email: string, password: string) => {
     setIsLoading(true);
     try {
+      setIsDemoMode(false);
+      localStorage.removeItem('carecircle_demo_mode');
+      dataService.setDemoMode(false);
+
       const res = await signInUser(email, password);
       if (res.user) {
         setAuthUser(res.user);
@@ -412,11 +432,15 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await signOutUser();
       setSession(null);
       setAuthUser(null);
+      setIsDemoMode(false);
+      localStorage.removeItem('carecircle_demo_mode');
       localStorage.removeItem('carecircle_selected_profile_id');
-      if (!isDemoMode) {
-        setCareProfile(null);
-        setCareProfiles([]);
-      }
+      localStorage.removeItem('carecircle_current_user');
+      dataService.setDemoMode(false);
+      dataService.setCurrentUser(null);
+      setCareProfile(null);
+      setCareProfiles([]);
+      window.location.href = '/login';
     } finally {
       setIsLoading(false);
     }
