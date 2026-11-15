@@ -10,6 +10,9 @@ import {
   ActivityLog,
   CareInsight,
   AdherenceAnalytics,
+  AssistanceLevel,
+  DoseEventSource,
+  FollowUpStatus,
 } from '@/types';
 import { dataService } from '@/services/storageAdapter';
 import { analyzeCareEvents, CareIntelligenceReport } from '@/lib/careIntelligence';
@@ -29,6 +32,7 @@ interface CareContextType {
   adherenceMetrics: AdherenceAnalytics;
   isLoading: boolean;
   unreadAlertsCount: number;
+  assistanceLevel: AssistanceLevel;
 
   // Actions
   recordDose: (params: {
@@ -37,9 +41,25 @@ interface CareContextType {
     scheduledDate: string;
     scheduledTime: string;
     status: 'taken' | 'skipped';
+    source?: DoseEventSource;
     skipReason?: string;
     notes?: string;
-  }) => Promise<{ success: boolean; alreadyConfirmed: boolean }>;
+  }) => Promise<{ success: boolean; alreadyConfirmed: boolean; error?: string }>;
+
+  correctDose: (params: {
+    originalLogId: string;
+    newStatus: 'taken' | 'skipped';
+    reason: string;
+    notes?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+
+  updateFollowUp: (params: {
+    doseLogId: string;
+    newStatus: FollowUpStatus;
+    note?: string;
+  }) => Promise<boolean>;
+
+  updateAssistanceLevel: (level: AssistanceLevel) => Promise<boolean>;
 
   saveMedication: (
     med: Omit<Medication, 'id'> & { id?: string },
@@ -74,7 +94,9 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<UserProfile>(
     () => dataService.getCurrentUser() || dataService.switchUserRole('elderly')
   );
-  const [careProfile, setCareProfile] = useState<CareProfile | null>(null);
+  const [careProfile, setCareProfile] = useState<CareProfile | null>(
+    () => dataService.getInitialCareProfile()
+  );
   const [careMembers, setCareMembers] = useState<CareMember[]>([]);
   const [medications, setMedications] = useState<Medication[]>([]);
   const [doseLogs, setDoseLogs] = useState<DoseLog[]>([]);
@@ -127,10 +149,11 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
     scheduledDate: string;
     scheduledTime: string;
     status: 'taken' | 'skipped';
+    source?: DoseEventSource;
     skipReason?: string;
     notes?: string;
   }) => {
-    if (!careProfile) return { success: false, alreadyConfirmed: false };
+    if (!careProfile) return { success: false, alreadyConfirmed: false, error: 'No care profile selected' };
     const res = await dataService.recordDoseAction({
       careProfileId: careProfile.id,
       medicationId: params.medicationId,
@@ -141,10 +164,64 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
       actorId: currentUser.id,
       actorName: currentUser.full_name,
       actorRole: currentUser.role,
+      source: params.source,
       skipReason: params.skipReason,
       notes: params.notes,
     });
     await refreshData();
+    return res;
+  };
+
+  const correctDose = async (params: {
+    originalLogId: string;
+    newStatus: 'taken' | 'skipped';
+    reason: string;
+    notes?: string;
+  }) => {
+    if (!careProfile) return { success: false, error: 'No care profile selected' };
+    const res = await dataService.correctDoseAction({
+      careProfileId: careProfile.id,
+      originalDoseLogId: params.originalLogId,
+      actorId: currentUser.id,
+      actorName: currentUser.full_name,
+      actorRole: currentUser.role,
+      newStatus: params.newStatus,
+      reason: params.reason,
+      notes: params.notes,
+    });
+    if (res.success) {
+      await refreshData();
+    }
+    return { success: res.success, error: res.error };
+  };
+
+  const updateFollowUp = async (params: {
+    doseLogId: string;
+    newStatus: FollowUpStatus;
+    note?: string;
+  }) => {
+    if (!careProfile) return false;
+    const res = await dataService.updateFollowUpStatus({
+      careProfileId: careProfile.id,
+      doseLogId: params.doseLogId,
+      actorId: currentUser.id,
+      actorName: currentUser.full_name,
+      actorRole: currentUser.role,
+      newStatus: params.newStatus,
+      note: params.note,
+    });
+    if (res) {
+      await refreshData();
+    }
+    return res;
+  };
+
+  const updateAssistanceLevel = async (level: AssistanceLevel) => {
+    if (!careProfile) return false;
+    const res = await dataService.updateAssistanceLevel(careProfile.id, level);
+    if (res) {
+      await refreshData();
+    }
     return res;
   };
 
@@ -261,6 +338,9 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return notifications.filter(n => n.status === 'pending' || n.status === 'sent').length;
   }, [notifications]);
 
+  // Assistance level
+  const assistanceLevel: AssistanceLevel = careProfile?.assistance_level || 'independent';
+
   return (
     <CareContext.Provider
       value={{
@@ -277,7 +357,11 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
         adherenceMetrics,
         isLoading,
         unreadAlertsCount,
+        assistanceLevel,
         recordDose,
+        correctDose,
+        updateFollowUp,
+        updateAssistanceLevel,
         saveMedication,
         deleteMedication,
         saveAppointment,

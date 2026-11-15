@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useCare } from '@/contexts/CareContext';
+import { useAccessibility } from '@/contexts/AccessibilityContext';
 import { DoseCard } from '@/components/medications/DoseCard';
 import {
   Heart,
@@ -14,13 +15,19 @@ import {
   Brain,
   Sparkles,
   Users,
+  Pill,
+  Clock,
+  Printer,
+  Shield,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { MedicationModal } from '@/components/medications/MedicationModal';
 import { AppointmentModal } from '@/components/appointments/AppointmentModal';
 import { AcknowledgeModal } from '@/components/notifications/AcknowledgeModal';
-import { Notification } from '@/types';
+import { DoctorVisitBriefModal } from '@/components/appointments/DoctorVisitBriefModal';
+import { CallFamilyModal } from '@/components/common/CallFamilyModal';
+import { Notification, Appointment } from '@/types';
 
 export const DashboardPage: React.FC = () => {
   const {
@@ -33,12 +40,18 @@ export const DashboardPage: React.FC = () => {
     activityLogs,
     adherenceMetrics,
     intelligenceReport,
+    assistanceLevel,
+    updateAssistanceLevel,
+    recordDose,
   } = useCare();
 
-  const [simplifiedElderlyView, setSimplifiedElderlyView] = useState(false);
+  const { largePrintMode } = useAccessibility();
   const [isMedModalOpen, setIsMedModalOpen] = useState(false);
   const [isAptModalOpen, setIsAptModalOpen] = useState(false);
   const [selectedNotifForAck, setSelectedNotifForAck] = useState<Notification | null>(null);
+  const [selectedAptForBrief, setSelectedAptForBrief] = useState<Appointment | null>(null);
+  const [heroActionNotice, setHeroActionNotice] = useState<string | null>(null);
+  const [isCallFamilyModalOpen, setIsCallFamilyModalOpen] = useState(false);
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
 
@@ -83,6 +96,28 @@ export const DashboardPage: React.FC = () => {
 
   const personName = careProfile?.preferred_name || careProfile?.full_name || 'Margaret';
 
+  // Find next pending dose for elderly hero card
+  const nextPendingDose = todaysScheduleItems.find(
+    i => i.doseLog?.status !== 'taken' && i.doseLog?.status !== 'skipped'
+  );
+
+  const handleConfirmNextDose = async (item: (typeof todaysScheduleItems)[0]) => {
+    setHeroActionNotice(null);
+    const res = await recordDose({
+      medicationId: item.medication.id,
+      scheduledDate: todayStr,
+      scheduledTime: item.time,
+      status: 'taken',
+    });
+    if (res.alreadyConfirmed) {
+      setHeroActionNotice('Already confirmed previously.');
+      setTimeout(() => setHeroActionNotice(null), 3000);
+    } else if (!res.success && res.error) {
+      setHeroActionNotice(res.error);
+      setTimeout(() => setHeroActionNotice(null), 5000);
+    }
+  };
+
   // =========================================================================
   // VIEW 1: ELDERLY INDIVIDUAL DASHBOARD (Accessible, simple, high clarity)
   // =========================================================================
@@ -99,38 +134,138 @@ export const DashboardPage: React.FC = () => {
               Good day, {personName}
             </h1>
             <p className="text-sm text-charcoal-light mt-1 max-w-xl">
-              Your care circle is active. Here is your daily medication schedule and routine for today.
+              Your care circle is connected. Everything you need for your daily health routine is below.
             </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setSimplifiedElderlyView(!simplifiedElderlyView)}
-              className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
-                simplifiedElderlyView
-                  ? 'bg-forest text-ivory border-forest shadow-warm'
-                  : 'bg-white text-forest border-stone hover:bg-stone-light'
-              }`}
-            >
-              {simplifiedElderlyView ? 'Standard View' : '🔍 Large Print Mode'}
-            </button>
-
-            <a
-              href={`tel:${careProfile?.emergency_phone || '5558765432'}`}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-terracotta text-ivory text-xs font-bold hover:bg-terracotta-dark shadow-warm touch-target-elderly"
-            >
-              <Phone className="w-4 h-4" />
-              <span>Call Family</span>
-            </a>
           </div>
         </div>
 
-        {/* Today's Medication Schedule */}
+        {/* 4 Primary Navigation Destinations for Elderly Individuals */}
+        <nav className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4" aria-label="Main Destinations">
+          <div className="bg-forest text-ivory p-4 rounded-2xl flex flex-col items-center justify-center text-center shadow-warm min-h-[64px] border-2 border-forest">
+            <Heart className="w-7 h-7 mb-1 text-ivory" />
+            <span className="font-bold text-base">Home</span>
+          </div>
+          <Link
+            to="/medications"
+            className="bg-white hover:bg-stone-light text-charcoal p-4 rounded-2xl flex flex-col items-center justify-center text-center shadow-warm-sm border border-stone min-h-[64px] transition-all hover:scale-[1.02] focus:ring-2 focus:ring-forest cursor-pointer"
+          >
+            <Pill className="w-7 h-7 mb-1 text-forest" />
+            <span className="font-bold text-base">My Medicines</span>
+          </Link>
+          <Link
+            to="/appointments"
+            className="bg-white hover:bg-stone-light text-charcoal p-4 rounded-2xl flex flex-col items-center justify-center text-center shadow-warm-sm border border-stone min-h-[64px] transition-all hover:scale-[1.02] focus:ring-2 focus:ring-forest cursor-pointer"
+          >
+            <Calendar className="w-7 h-7 mb-1 text-forest" />
+            <span className="font-bold text-base">Doctor Visits</span>
+          </Link>
+          <button
+            onClick={() => setIsCallFamilyModalOpen(true)}
+            className="bg-terracotta hover:bg-terracotta-dark text-ivory p-4 rounded-2xl flex flex-col items-center justify-center text-center shadow-warm min-h-[64px] transition-all hover:scale-[1.02] focus:ring-2 focus:ring-terracotta cursor-pointer"
+            aria-label="Call Family"
+          >
+            <Phone className="w-7 h-7 mb-1 text-ivory" />
+            <span className="font-bold text-base">Call Family</span>
+          </button>
+        </nav>
+
+        {/* HERO CARD: "Your Next Medicine" */}
+        {nextPendingDose ? (
+          <section
+            aria-labelledby="next-medicine-heading"
+            className="bg-gradient-to-br from-cream-light via-ivory to-stone-light/50 border-2 border-forest/30 p-6 sm:p-8 rounded-3xl shadow-warm space-y-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span
+                id="next-medicine-heading"
+                className="text-xs font-bold uppercase tracking-wider px-3.5 py-1.5 bg-forest text-ivory rounded-full shadow-warm-xs"
+              >
+                Your Next Medicine
+              </span>
+              <span className="text-sm font-semibold text-charcoal flex items-center gap-1.5 bg-white px-3 py-1 rounded-full border border-stone/60">
+                <Clock className="w-4 h-4 text-forest" />
+                Scheduled for {nextPendingDose.time}
+                {nextPendingDose.label ? ` • ${nextPendingDose.label}` : ''}
+              </span>
+            </div>
+
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pt-2">
+              <div className="space-y-1.5">
+                <h2 className="font-serif text-3xl sm:text-4xl font-bold text-forest">
+                  {nextPendingDose.medication.name}
+                </h2>
+                <p className="text-lg font-semibold text-charcoal">
+                  Dosage: {nextPendingDose.medication.dosage}
+                </p>
+                {nextPendingDose.medication.instructions && (
+                  <p className="text-base text-charcoal-light">
+                    Instructions: {nextPendingDose.medication.instructions}
+                  </p>
+                )}
+                {nextPendingDose.medication.color && (
+                  <p className="text-xs text-charcoal-muted font-medium pt-1">
+                    Appearance: {nextPendingDose.medication.color} {nextPendingDose.medication.shape || 'tablet'}
+                  </p>
+                )}
+              </div>
+
+              {/* Action Buttons for Next Medicine */}
+              {assistanceLevel === 'caregiver_managed' ? (
+                <div className="bg-white border-2 border-forest/30 p-5 rounded-2xl flex items-center gap-3 max-w-md shadow-warm-sm">
+                  <ShieldCheck className="w-8 h-8 text-forest shrink-0" />
+                  <p className="text-xs text-charcoal leading-relaxed font-medium">
+                    <strong>Caregiver Managed Mode:</strong> Nurse Elena administers this dose. Your care circle is updated automatically.
+                  </p>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={() => handleConfirmNextDose(nextPendingDose)}
+                    className="px-8 py-4 rounded-2xl bg-forest hover:bg-forest-light text-ivory text-xl font-bold shadow-warm flex items-center gap-2.5 min-h-[56px] min-w-[56px] active:scale-95 cursor-pointer transition-all"
+                    aria-label={`Confirm I Took My ${nextPendingDose.medication.name}`}
+                  >
+                    <CheckCircle2 className="w-7 h-7 stroke-[2.5]" />
+                    <span>I Took It</span>
+                  </button>
+
+                  <button
+                    onClick={() => setIsCallFamilyModalOpen(true)}
+                    className="px-6 py-4 rounded-2xl border-2 border-stone bg-white hover:bg-stone-light text-charcoal font-bold text-base flex items-center gap-2 min-h-[56px] min-w-[56px] cursor-pointer"
+                    aria-label="Call Family"
+                  >
+                    <Phone className="w-5 h-5 text-terracotta" />
+                    <span>Call Family</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {heroActionNotice && (
+              <p className="text-xs font-semibold text-terracotta bg-terracotta/10 px-3 py-1.5 rounded-lg border border-terracotta/20">
+                {heroActionNotice}
+              </p>
+            )}
+          </section>
+        ) : (
+          <div className="bg-forest/5 border border-forest/20 p-6 rounded-3xl flex items-center gap-4">
+            <CheckCircle2 className="w-10 h-10 text-forest shrink-0" />
+            <div>
+              <h3 className="font-serif text-xl font-bold text-forest">
+                All medications complete for today!
+              </h3>
+              <p className="text-sm text-charcoal-light">
+                You are all caught up on your scheduled doses. Your family and caregivers have been notified.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Today's Full Medication Schedule */}
         <section className="space-y-4" aria-labelledby="today-meds-heading">
           <div className="flex items-center justify-between">
             <div>
               <h2 id="today-meds-heading" className="font-serif text-2xl font-bold text-charcoal">
-                Today's Medications
+                Today's Medication Schedule
               </h2>
               <p className="text-xs text-charcoal-muted">
                 Tap "I Took This" after taking your medication to keep your circle informed.
@@ -158,7 +293,7 @@ export const DashboardPage: React.FC = () => {
                   scheduleLabel={item.label}
                   doseLog={item.doseLog}
                   scheduledDate={todayStr}
-                  simplifiedView={simplifiedElderlyView}
+                  simplifiedView={largePrintMode}
                 />
               ))}
             </div>
@@ -186,7 +321,7 @@ export const DashboardPage: React.FC = () => {
             ) : (
               <div className="space-y-3">
                 {upcomingApts.map(apt => (
-                  <div key={apt.id} className="p-3 bg-stone-light/60 rounded-xl space-y-1">
+                  <div key={apt.id} className="p-3 bg-stone-light/60 rounded-xl space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-sm text-charcoal">{apt.doctor_name}</span>
                       <span className="text-xs font-medium text-forest bg-forest/10 px-2 py-0.5 rounded-full">
@@ -194,7 +329,16 @@ export const DashboardPage: React.FC = () => {
                       </span>
                     </div>
                     <p className="text-xs text-charcoal-light">{apt.specialty || 'General Practitioner'} • {apt.location}</p>
-                    {apt.notes && <p className="text-[11px] text-charcoal-muted italic">{apt.notes}</p>}
+                    <div className="flex items-center justify-between pt-1">
+                      {apt.notes ? <p className="text-[11px] text-charcoal-muted italic">{apt.notes}</p> : <span />}
+                      <button
+                        onClick={() => setSelectedAptForBrief(apt)}
+                        className="inline-flex items-center gap-1 text-xs text-forest hover:underline font-semibold cursor-pointer"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        <span>Clinical Brief</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -231,6 +375,18 @@ export const DashboardPage: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {selectedAptForBrief && (
+          <DoctorVisitBriefModal
+            appointment={selectedAptForBrief}
+            onClose={() => setSelectedAptForBrief(null)}
+          />
+        )}
+
+        <CallFamilyModal
+          isOpen={isCallFamilyModalOpen}
+          onClose={() => setIsCallFamilyModalOpen(false)}
+        />
       </div>
     );
   }
@@ -309,9 +465,18 @@ export const DashboardPage: React.FC = () => {
             <div className="font-serif text-3xl font-bold text-forest">
               {upcomingApts.length}
             </div>
-            <p className="text-xs text-charcoal-muted">
-              Next: {upcomingApts[0]?.doctor_name || 'None pending'}
-            </p>
+            <div className="flex items-center justify-between text-xs text-charcoal-muted">
+              <span>Next: {upcomingApts[0]?.doctor_name || 'None pending'}</span>
+              {upcomingApts[0] && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedAptForBrief(upcomingApts[0])}
+                  className="text-forest hover:underline font-semibold cursor-pointer"
+                >
+                  Brief
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -396,6 +561,18 @@ export const DashboardPage: React.FC = () => {
             onClose={() => setSelectedNotifForAck(null)}
           />
         )}
+
+        {selectedAptForBrief && (
+          <DoctorVisitBriefModal
+            appointment={selectedAptForBrief}
+            onClose={() => setSelectedAptForBrief(null)}
+          />
+        )}
+
+        <CallFamilyModal
+          isOpen={isCallFamilyModalOpen}
+          onClose={() => setIsCallFamilyModalOpen(false)}
+        />
       </div>
     );
   }
@@ -503,6 +680,87 @@ export const DashboardPage: React.FC = () => {
         )}
       </section>
 
+      {/* Assisted Care Mode Configuration */}
+      <section className="bg-white border border-stone p-6 rounded-3xl shadow-warm-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone/60 pb-3">
+          <div className="flex items-center gap-2">
+            <Shield className="w-5 h-5 text-forest" />
+            <h3 className="font-serif text-xl font-bold text-forest">
+              Assisted Care Configuration
+            </h3>
+          </div>
+          <span className="text-xs px-3 py-1 rounded-full font-bold uppercase tracking-wider bg-forest/10 text-forest self-start sm:self-auto">
+            Active Mode: {assistanceLevel.replace('_', ' ')}
+          </span>
+        </div>
+
+        <p className="text-xs text-charcoal-muted leading-relaxed">
+          Configure {personName}'s level of independence. The system automatically restricts or enables self-confirmations and schedules corresponding caregiver supervision.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+          <button
+            type="button"
+            onClick={() => updateAssistanceLevel('independent')}
+            className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+              assistanceLevel === 'independent'
+                ? 'border-forest bg-forest/5 shadow-warm ring-2 ring-forest/30'
+                : 'border-stone hover:bg-stone-light/60'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold text-sm text-forest">Independent</span>
+              {assistanceLevel === 'independent' && (
+                <CheckCircle2 className="w-4 h-4 text-forest" />
+              )}
+            </div>
+            <p className="text-xs text-charcoal-light leading-relaxed">
+              Margaret personally manages and self-confirms her medicines on her own schedule.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateAssistanceLevel('needs_assistance')}
+            className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+              assistanceLevel === 'needs_assistance'
+                ? 'border-forest bg-forest/5 shadow-warm ring-2 ring-forest/30'
+                : 'border-stone hover:bg-stone-light/60'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold text-sm text-forest">Needs Assistance</span>
+              {assistanceLevel === 'needs_assistance' && (
+                <CheckCircle2 className="w-4 h-4 text-forest" />
+              )}
+            </div>
+            <p className="text-xs text-charcoal-light leading-relaxed">
+              Margaret or Elena/David can record doses. Active reminders and check-ins assist.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateAssistanceLevel('caregiver_managed')}
+            className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+              assistanceLevel === 'caregiver_managed'
+                ? 'border-forest bg-forest/5 shadow-warm ring-2 ring-forest/30'
+                : 'border-stone hover:bg-stone-light/60'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold text-sm text-forest">Caregiver Managed</span>
+              {assistanceLevel === 'caregiver_managed' && (
+                <CheckCircle2 className="w-4 h-4 text-forest" />
+              )}
+            </div>
+            <p className="text-xs text-charcoal-light leading-relaxed">
+              Nurse Elena administers doses. Margaret's screen is read-only to prevent confusion.
+            </p>
+          </button>
+        </div>
+      </section>
+
       {/* Today's Administration Schedule */}
       <section className="space-y-4">
         <h2 className="font-serif text-2xl font-bold text-charcoal">
@@ -539,6 +797,12 @@ export const DashboardPage: React.FC = () => {
         <AcknowledgeModal
           notification={selectedNotifForAck}
           onClose={() => setSelectedNotifForAck(null)}
+        />
+      )}
+      {selectedAptForBrief && (
+        <DoctorVisitBriefModal
+          appointment={selectedAptForBrief}
+          onClose={() => setSelectedAptForBrief(null)}
         />
       )}
     </div>

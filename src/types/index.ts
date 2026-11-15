@@ -1,4 +1,16 @@
 export type UserRole = 'elderly' | 'family' | 'caretaker';
+export type AssistanceLevel = 'independent' | 'needs_assistance' | 'caregiver_managed';
+export type DoseEventSource = 'self' | 'caregiver_administered' | 'family_reported' | 'system';
+export type AdherenceStatus = 'scheduled' | 'on_time' | 'late' | 'missed' | 'unconfirmed' | 'skipped';
+export type FollowUpStatus =
+  | 'none'
+  | 'unconfirmed'
+  | 'contacting'
+  | 'verified_taken'
+  | 'verified_not_taken'
+  | 'unable_to_reach'
+  | 'refused_reported'
+  | 'escalated';
 
 export interface UserProfile {
   id: string;
@@ -21,8 +33,12 @@ export interface CareProfile {
   blood_group?: string;
   allergies?: string[];
   emergency_phone?: string;
+  emergency_contact?: string;
+  emergency_contact_name?: string;
   address?: string;
   medical_notes?: string;
+  assistance_level: AssistanceLevel;
+  timezone: string; // e.g. 'America/Los_Angeles'
   created_at?: string;
   updated_at?: string;
 }
@@ -32,6 +48,7 @@ export interface CareMember {
   care_profile_id: string;
   user_id: string;
   role: 'owner' | 'family' | 'caretaker';
+  relationship?: string;
   can_manage_medications: boolean;
   can_manage_appointments: boolean;
   can_invite_members: boolean;
@@ -40,6 +57,7 @@ export interface CareMember {
   status: 'active' | 'revoked';
   joined_at: string;
   profile?: UserProfile;
+  user?: UserProfile;
 }
 
 export interface Invitation {
@@ -70,6 +88,9 @@ export interface Medication {
   rx_number?: string;
   refill_date?: string;
   refill_quantity?: number;
+  current_supply?: number;
+  color?: string;
+  shape?: string;
   color_code?: string;
   is_active: boolean;
   start_date: string;
@@ -101,11 +122,23 @@ export interface DoseLog {
   dose_identity: string; // e.g., 'dose_med123_2026-03-01_08:00'
   scheduled_date: string; // 'YYYY-MM-DD'
   scheduled_time: string; // '08:00'
+  scheduled_at?: string;  // Concrete ISO timestamp with timezone
+  actual_at?: string;     // When the dose was actually taken/administered
   status: DoseStatus;
+  adherence_status?: AdherenceStatus;
+  follow_up_status?: FollowUpStatus;
+  source?: DoseEventSource;
+  recorded_by?: string;
+  recorded_by_role?: string;
+  actor_name?: string;
+  provenance_description?: string;
   confirmed_at?: string;
   confirmed_by?: string;
   notes?: string;
   skip_reason?: string;
+  correction_of_id?: string;
+  correction_reason?: string;
+  is_corrected?: boolean;
   created_at?: string;
   medication?: Medication;
   schedule?: MedicationSchedule;
@@ -168,8 +201,10 @@ export interface ActivityLog {
     | 'medication_updated'
     | 'dose_taken'
     | 'dose_skipped'
+    | 'dose_corrected'
     | 'dose_unconfirmed_escalated'
     | 'alert_acknowledged'
+    | 'follow_up_updated'
     | 'appointment_created'
     | 'appointment_cancelled'
     | 'member_joined'
@@ -198,6 +233,8 @@ export interface CareInsight {
 export interface AdherenceAnalytics {
   totalScheduled: number;
   confirmedCount: number;
+  onTimeCount: number;
+  lateCount: number;
   skippedCount: number;
   unconfirmedCount: number;
   adherenceRate: number; // percentage 0-100

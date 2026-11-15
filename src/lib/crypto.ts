@@ -19,6 +19,8 @@ export function generatePasscode(): string {
   return `CARE-${result}`;
 }
 
+export const generateInvitationPasscode = generatePasscode;
+
 export async function hashPasscode(passcode: string): Promise<string> {
   const normalized = passcode.trim().toUpperCase();
   const encoder = new TextEncoder();

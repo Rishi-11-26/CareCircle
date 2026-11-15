@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Medication, DoseLog } from '@/types';
 import { useCare } from '@/contexts/CareContext';
-import { CheckCircle2, Clock, AlertTriangle, XCircle, Check, HelpCircle } from 'lucide-react';
+import { useAccessibility } from '@/contexts/AccessibilityContext';
+import { CheckCircle2, Clock, AlertTriangle, XCircle, Check, HelpCircle, Shield } from 'lucide-react';
 import { format } from 'date-fns';
 
 interface DoseCardProps {
@@ -21,19 +22,24 @@ export const DoseCard: React.FC<DoseCardProps> = ({
   scheduledDate,
   simplifiedView = false,
 }) => {
-  const { recordDose, currentUser } = useCare();
+  const { recordDose, currentUser, assistanceLevel } = useCare();
+  const { largePrintMode } = useAccessibility();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSkipModal, setShowSkipModal] = useState(false);
   const [skipReason, setSkipReason] = useState('');
-  const [alreadyNotice, setAlreadyNotice] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
 
+  const isLarge = simplifiedView || largePrintMode;
   const isTaken = doseLog?.status === 'taken';
   const isSkipped = doseLog?.status === 'skipped';
   const isUnconfirmed = doseLog?.status === 'unconfirmed';
 
+  const isCaregiverManaged = assistanceLevel === 'caregiver_managed';
+  const isElderlyUser = currentUser.role === 'elderly';
+
   const handleConfirmTaken = async () => {
     setIsSubmitting(true);
-    setAlreadyNotice(null);
+    setActionNotice(null);
     try {
       const res = await recordDose({
         medicationId: medication.id,
@@ -42,8 +48,11 @@ export const DoseCard: React.FC<DoseCardProps> = ({
         status: 'taken',
       });
       if (res.alreadyConfirmed) {
-        setAlreadyNotice('Already confirmed previously.');
-        setTimeout(() => setAlreadyNotice(null), 3000);
+        setActionNotice('Already confirmed previously.');
+        setTimeout(() => setActionNotice(null), 3500);
+      } else if (!res.success && res.error) {
+        setActionNotice(res.error);
+        setTimeout(() => setActionNotice(null), 5000);
       }
     } finally {
       setIsSubmitting(false);
@@ -52,16 +61,22 @@ export const DoseCard: React.FC<DoseCardProps> = ({
 
   const handleConfirmSkip = async () => {
     setIsSubmitting(true);
+    setActionNotice(null);
     try {
-      await recordDose({
+      const res = await recordDose({
         medicationId: medication.id,
         scheduledDate,
         scheduledTime: scheduleTime,
         status: 'skipped',
         skipReason: skipReason.trim() || 'Patient reported feeling unwell or fasting',
       });
-      setShowSkipModal(false);
-      setSkipReason('');
+      if (!res.success && res.error) {
+        setActionNotice(res.error);
+        setTimeout(() => setActionNotice(null), 5000);
+      } else {
+        setShowSkipModal(false);
+        setSkipReason('');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -111,28 +126,34 @@ export const DoseCard: React.FC<DoseCardProps> = ({
           </div>
 
           <div className="pt-1">
-            <h3 className={`font-serif text-charcoal ${simplifiedView ? 'text-2xl font-bold' : 'text-xl font-bold'}`}>
+            <h3 className={`font-serif text-charcoal ${isLarge ? 'text-2xl font-bold' : 'text-xl font-bold'}`}>
               {medication.name}{' '}
               <span className="text-base font-sans font-normal text-charcoal-light">
                 ({medication.dosage})
               </span>
             </h3>
             {medication.instructions && (
-              <p className={`text-charcoal-light ${simplifiedView ? 'text-base font-medium' : 'text-sm'}`}>
+              <p className={`text-charcoal-light ${isLarge ? 'text-base font-medium' : 'text-sm'}`}>
                 {medication.instructions}
               </p>
             )}
           </div>
 
-          {!simplifiedView && medication.prescribing_doctor && (
+          {!isLarge && medication.prescribing_doctor && (
             <p className="text-xs text-charcoal-muted">
               Prescribed by {medication.prescribing_doctor}
             </p>
           )}
 
-          {alreadyNotice && (
-            <p className="text-xs text-forest font-semibold animate-bounce">
-              {alreadyNotice}
+          {doseLog?.provenance_description && (
+            <p className="text-[11px] text-charcoal-muted italic">
+              {doseLog.provenance_description}
+            </p>
+          )}
+
+          {actionNotice && (
+            <p className="text-xs font-semibold text-terracotta bg-terracotta/10 px-3 py-1.5 rounded-lg border border-terracotta/20 animate-in fade-in">
+              {actionNotice}
             </p>
           )}
         </div>
@@ -140,26 +161,32 @@ export const DoseCard: React.FC<DoseCardProps> = ({
         {/* Right: Touch-friendly confirmation actions */}
         <div className="flex items-center gap-2 pt-2 sm:pt-0">
           {isTaken ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-forest font-medium">
+            <div className="flex flex-col sm:items-end gap-1">
+              <span className="text-xs text-forest font-semibold flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-forest" />
                 Dose complete
               </span>
               <button
                 onClick={() => setShowSkipModal(true)}
-                className="text-xs text-charcoal-muted hover:text-charcoal underline px-2 py-1"
+                className="text-[11px] text-charcoal-muted hover:text-charcoal underline"
                 title="Change or record note"
               >
                 Change status
               </button>
+            </div>
+          ) : isElderlyUser && isCaregiverManaged ? (
+            <div className="bg-stone-light/80 border border-stone px-4 py-2.5 rounded-xl text-xs text-charcoal-muted font-medium flex items-center gap-2">
+              <Shield className="w-4 h-4 text-forest shrink-0" />
+              <span>Administered by Caregiver</span>
             </div>
           ) : (
             <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full sm:w-auto">
               <button
                 onClick={handleConfirmTaken}
                 disabled={isSubmitting}
-                className={`flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-6 rounded-xl font-bold transition-all touch-target-elderly ${
-                  simplifiedView ? 'text-lg py-3' : 'text-base py-2.5'
-                } bg-forest text-ivory hover:bg-forest-light shadow-warm active:scale-95`}
+                className={`flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-6 rounded-xl font-bold transition-all min-h-[56px] min-w-[56px] ${
+                  isLarge ? 'text-lg py-3' : 'text-base py-2.5'
+                } bg-forest text-ivory hover:bg-forest-light shadow-warm active:scale-95 cursor-pointer`}
                 aria-label={`Confirm taken ${medication.name} at ${scheduleTime}`}
               >
                 <Check className="w-5 h-5 stroke-[2.5]" />
@@ -169,7 +196,7 @@ export const DoseCard: React.FC<DoseCardProps> = ({
               <button
                 onClick={() => setShowSkipModal(true)}
                 disabled={isSubmitting}
-                className="px-4 py-2.5 rounded-xl border border-stone bg-white text-charcoal-muted hover:text-charcoal hover:bg-stone-light text-sm font-medium transition-colors touch-target-elderly"
+                className="px-4 py-2.5 rounded-xl border border-stone bg-white text-charcoal-muted hover:text-charcoal hover:bg-stone-light text-sm font-medium transition-colors min-h-[56px] cursor-pointer"
                 aria-label={`Skip dose of ${medication.name}`}
               >
                 Skip...

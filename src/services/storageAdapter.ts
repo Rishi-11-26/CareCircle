@@ -9,9 +9,13 @@ import {
   Appointment,
   Notification,
   ActivityLog,
+  AssistanceLevel,
+  DoseEventSource,
+  FollowUpStatus,
 } from '@/types';
 import { hashPasscode, maskPasscodeHint } from '@/lib/crypto';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { validateConfirmationWindow, DEFAULT_PROFILE_TIMEZONE } from '@/lib/dateUtils';
 import { format, subDays, addDays } from 'date-fns';
 
 const STORAGE_KEYS = {
@@ -75,6 +79,8 @@ export function generateSeedData() {
     emergency_phone: '(555) 876-5432',
     address: '422 Elmwood Terrace, Apt 3B, Portland, OR',
     medical_notes: 'Mild hypertension, early osteoarthritis in knees. Prefers large print and simple reminder alerts.',
+    assistance_level: 'needs_assistance',
+    timezone: 'America/Los_Angeles',
     created_at: subDays(new Date(), 30).toISOString(),
   };
 
@@ -382,7 +388,11 @@ export function generateSeedData() {
       scheduled_date: today,
       scheduled_time: '08:00',
       status: 'taken',
-      confirmed_at: `${today}T08:08:00Z`,
+      adherence_status: 'on_time',
+      source: 'self',
+      recorded_by: elderlyUser.id,
+      recorded_by_role: 'elderly',
+      confirmed_at: new Date(today + 'T08:08:00').toISOString(),
       confirmed_by: elderlyUser.id,
     },
     {
@@ -394,8 +404,12 @@ export function generateSeedData() {
       scheduled_date: today,
       scheduled_time: '08:00',
       status: 'taken',
-      confirmed_at: `${today}T08:08:00Z`,
-      confirmed_by: elderlyUser.id,
+      adherence_status: 'on_time',
+      source: 'caregiver_administered',
+      recorded_by: caretakerUser.id,
+      recorded_by_role: 'caretaker',
+      confirmed_at: new Date(today + 'T08:08:00').toISOString(),
+      confirmed_by: caretakerUser.id,
     },
     {
       id: 'dose_log_13',
@@ -405,7 +419,9 @@ export function generateSeedData() {
       dose_identity: `dose_med_calcium_${today}_12:00`,
       scheduled_date: today,
       scheduled_time: '12:00',
-      status: 'due',
+      status: 'unconfirmed',
+      adherence_status: 'unconfirmed',
+      follow_up_status: 'contacting',
     },
     {
       id: 'dose_log_14',
@@ -495,8 +511,18 @@ export function generateSeedData() {
       actor_name: 'Margaret Hayes',
       actor_role: 'elderly',
       activity_type: 'dose_taken',
-      description: 'Margaret Hayes confirmed Lisinopril (10mg) and Metformin (500mg) taken for morning schedule.',
-      created_at: `${today}T08:08:00Z`,
+      description: 'Margaret Hayes self-confirmed Lisinopril (10mg) for morning schedule.',
+      created_at: new Date(today + 'T08:08:00').toISOString(),
+    },
+    {
+      id: 'act_1b',
+      care_profile_id: careProfile.id,
+      actor_id: caretakerUser.id,
+      actor_name: 'Nurse Elena Rostova',
+      actor_role: 'caretaker',
+      activity_type: 'dose_taken',
+      description: 'Administered by Nurse Elena Rostova — Caretaker. (Metformin 500mg morning dose)',
+      created_at: new Date(today + 'T08:08:00').toISOString(),
     },
     {
       id: 'act_2',
@@ -688,6 +714,10 @@ class StorageDataService {
   }
 
   // --- Care Profiles & Members ---
+  getInitialCareProfile(): CareProfile | null {
+    return this.inMemoryCache.careProfiles[0] || null;
+  }
+
   async getCareProfiles(): Promise<CareProfile[]> {
     if (isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase.from('care_profiles').select('*');
@@ -750,11 +780,23 @@ class StorageDataService {
     return invitation;
   }
 
+  async revokeInvitation(id: string): Promise<boolean> {
+    const invite = this.inMemoryCache.invitations.find(i => i.id === id);
+    if (!invite) return false;
+    invite.status = 'revoked';
+    if (isSupabaseConfigured() && supabase) {
+      await supabase.from('invitations').update({ status: 'revoked' }).eq('id', id);
+    }
+    this.saveAll();
+    return true;
+  }
+
   private failedAttempts: Record<string, { count: number; lockedUntil: number }> = {};
 
-  async redeemInvitation(passcode: string, user: UserProfile): Promise<{ success: boolean; error?: string; careProfileId?: string }> {
+  async redeemInvitation(passcode: string, user?: UserProfile): Promise<{ success: boolean; error?: string; careProfileId?: string }> {
+    const activeUser = user || this.getCurrentUser() || this.inMemoryCache.users[0];
     // 1. Client & Server-side Rate Limiting check: max 5 failed attempts in 15 mins
-    const userAttempts = this.failedAttempts[user.id];
+    const userAttempts = this.failedAttempts[activeUser.id];
     if (userAttempts && userAttempts.lockedUntil > Date.now()) {
       const minsRemaining = Math.ceil((userAttempts.lockedUntil - Date.now()) / (60 * 1000));
       return {
@@ -764,12 +806,12 @@ class StorageDataService {
     }
 
     const recordFailedAttempt = () => {
-      const current = this.failedAttempts[user.id] || { count: 0, lockedUntil: 0 };
+      const current = this.failedAttempts[activeUser.id] || { count: 0, lockedUntil: 0 };
       current.count += 1;
       if (current.count >= 5) {
         current.lockedUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lockout
       }
-      this.failedAttempts[user.id] = current;
+      this.failedAttempts[activeUser.id] = current;
     };
 
     const hash = await hashPasscode(passcode);
@@ -777,7 +819,6 @@ class StorageDataService {
     if (isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase.rpc('redeem_invitation', {
         p_code: passcode,
-        p_user_id: user.id,
       });
       if (error) {
         recordFailedAttempt();
@@ -786,7 +827,7 @@ class StorageDataService {
       if (!data.success) {
         recordFailedAttempt();
       } else {
-        delete this.failedAttempts[user.id];
+        delete this.failedAttempts[activeUser.id];
       }
       return data;
     }
@@ -813,11 +854,11 @@ class StorageDataService {
     }
 
     // Reset failed attempts upon successful validation
-    delete this.failedAttempts[user.id];
+    delete this.failedAttempts[activeUser.id];
 
     // Check existing membership
     const existing = this.inMemoryCache.careMembers.find(
-      m => m.care_profile_id === invite.care_profile_id && m.user_id === user.id
+      m => m.care_profile_id === invite.care_profile_id && m.user_id === activeUser.id
     );
     if (existing && existing.status === 'active') {
       return { success: false, error: 'You are already an active member of this Care Circle.' };
@@ -827,7 +868,7 @@ class StorageDataService {
     const newMember: CareMember = {
       id: `member_${Date.now()}`,
       care_profile_id: invite.care_profile_id,
-      user_id: user.id,
+      user_id: activeUser.id,
       role: invite.role,
       can_manage_medications: invite.role === 'caretaker',
       can_manage_appointments: invite.role === 'caretaker',
@@ -836,7 +877,7 @@ class StorageDataService {
       receive_email_alerts: true,
       status: 'active',
       joined_at: new Date().toISOString(),
-      profile: user,
+      profile: activeUser,
     };
 
     if (existing) {
@@ -848,16 +889,16 @@ class StorageDataService {
 
     invite.status = 'redeemed';
     invite.redeemed_at = new Date().toISOString();
-    invite.redeemed_by = user.id;
+    invite.redeemed_by = activeUser.id;
 
     // Log activity
     this.addActivityLog({
       careProfileId: invite.care_profile_id,
-      actorId: user.id,
-      actorName: user.full_name,
+      actorId: activeUser.id,
+      actorName: activeUser.full_name,
       actorRole: invite.role,
       activityType: 'member_joined',
-      description: `${user.full_name} joined the Care Circle as ${invite.role === 'family' ? 'Family Member' : 'Caretaker'}.`,
+      description: `${activeUser.full_name} joined the Care Circle as ${invite.role === 'family' ? 'Family Member' : 'Caretaker'}.`,
     });
 
     this.saveAll();
@@ -996,9 +1037,14 @@ class StorageDataService {
   }
 
   /**
-   * Idempotent Dose Confirmation:
-   * Prevents duplicate confirmations and marks escalation notifications resolved.
+   * Idempotent Dose Confirmation & Atomic Event Recording
+   * Enforces window validation, assisted-care permissions, append-only history,
+   * and authentic actor/source provenance.
    */
+  async recordDose(params: Parameters<StorageDataService['recordDoseAction']>[0]) {
+    return this.recordDoseAction(params);
+  }
+
   async recordDoseAction(params: {
     careProfileId: string;
     medicationId: string;
@@ -1006,32 +1052,72 @@ class StorageDataService {
     scheduledDate: string;
     scheduledTime: string;
     status: 'taken' | 'skipped';
+    source?: DoseEventSource;
     actorId?: string;
     actorName: string;
     actorRole: string;
     skipReason?: string;
     notes?: string;
-  }): Promise<{ success: boolean; alreadyConfirmed: boolean; doseLog: DoseLog }> {
+    isCorrection?: boolean;
+    correctingLogId?: string;
+    correctionReason?: string;
+  }): Promise<{ success: boolean; alreadyConfirmed: boolean; error?: string; doseLog: DoseLog }> {
     const doseIdentity = `dose_${params.medicationId}_${params.scheduledDate}_${params.scheduledTime}`;
+    const source: DoseEventSource =
+      params.source ||
+      (params.actorRole === 'caretaker'
+        ? 'caregiver_administered'
+        : params.actorRole === 'family'
+        ? 'family_reported'
+        : 'self');
+
+    // 1. Window Validation: Prevent future dose confirmation (unless documenting exception/correction)
+    if (params.status === 'taken' && !params.isCorrection) {
+      const windowCheck = validateConfirmationWindow(params.scheduledDate, params.scheduledTime);
+      if (windowCheck.isEarly) {
+        return {
+          success: false,
+          alreadyConfirmed: false,
+          error: windowCheck.reason || 'Dose is scheduled for later. Confirmation is not yet open.',
+          doseLog: null as any,
+        };
+      }
+    }
+
+    // 2. Assistance Level Guardrail Check
+    const careProfile = this.inMemoryCache.careProfiles.find(p => p.id === params.careProfileId);
+    if (
+      careProfile?.assistance_level === 'caregiver_managed' &&
+      (source === 'self' || params.actorRole === 'elderly')
+    ) {
+      return {
+        success: false,
+        alreadyConfirmed: false,
+        error: 'This profile is in Caregiver Managed mode. Medications must be administered and recorded by an authorized caregiver.',
+        doseLog: null as any,
+      };
+    }
 
     if (isSupabaseConfigured() && supabase) {
-      const { data } = await supabase.rpc('record_dose_action', {
+      const { data } = await supabase.rpc('record_dose_event', {
         p_care_profile_id: params.careProfileId,
         p_medication_id: params.medicationId,
         p_schedule_id: params.scheduleId || null,
         p_scheduled_date: params.scheduledDate,
         p_scheduled_time: params.scheduledTime,
         p_status: params.status,
-        p_confirmed_by: params.actorId || null,
-        p_actor_name: params.actorName,
-        p_actor_role: params.actorRole,
+        p_source: source,
         p_notes: params.notes || null,
         p_skip_reason: params.skipReason || null,
+        p_is_correction: params.isCorrection || false,
+        p_correcting_log_id: params.correctingLogId || null,
+        p_correction_reason: params.correctionReason || null,
       });
       if (data) {
         return {
           success: data.success,
           alreadyConfirmed: data.already_confirmed || false,
+          error: data.error,
           doseLog: data.log,
         };
       }
@@ -1039,11 +1125,58 @@ class StorageDataService {
 
     // Local / In-memory execution
     let log = this.inMemoryCache.doseLogs.find(
-      l => l.care_profile_id === params.careProfileId && l.dose_identity === doseIdentity
+      l => l.care_profile_id === params.careProfileId && l.dose_identity === doseIdentity && !l.is_corrected
     );
 
     let alreadyConfirmed = false;
     const nowIso = new Date().toISOString();
+    const med = this.inMemoryCache.medications.find(m => m.id === params.medicationId);
+    const windowCheck = validateConfirmationWindow(params.scheduledDate, params.scheduledTime);
+    const adherenceStatus = params.status === 'skipped' ? 'skipped' : windowCheck.isLate ? 'late' : 'on_time';
+
+    // Handle Append-Only Correction Workflow
+    if (params.isCorrection && params.correctingLogId) {
+      const orig = this.inMemoryCache.doseLogs.find(l => l.id === params.correctingLogId);
+      if (orig) {
+        orig.is_corrected = true;
+      }
+      log = {
+        id: `dose_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        care_profile_id: params.careProfileId,
+        medication_id: params.medicationId,
+        schedule_id: params.scheduleId,
+        dose_identity: `${doseIdentity}_corr_${Date.now()}`,
+        scheduled_date: params.scheduledDate,
+        scheduled_time: params.scheduledTime,
+        status: params.status,
+        adherence_status: adherenceStatus,
+        source,
+        recorded_by: params.actorId,
+        recorded_by_role: params.actorRole,
+        confirmed_at: nowIso,
+        confirmed_by: params.actorId,
+        actual_at: nowIso,
+        correction_of_id: params.correctingLogId,
+        correction_reason: params.correctionReason,
+        skip_reason: params.skipReason,
+        notes: params.notes,
+        is_corrected: false,
+        created_at: nowIso,
+      };
+      this.inMemoryCache.doseLogs.push(log);
+
+      this.addActivityLog({
+        careProfileId: params.careProfileId,
+        actorId: params.actorId,
+        actorName: params.actorName,
+        actorRole: params.actorRole,
+        activityType: 'dose_corrected',
+        description: `${params.actorName} corrected dose record for ${med?.name || 'medication'}: ${params.correctionReason || 'Clinical adjustment'} (Status: ${params.status}).`,
+      });
+
+      this.saveAll();
+      return { success: true, alreadyConfirmed: false, doseLog: log };
+    }
 
     if (log) {
       if (log.status === 'taken' && params.status === 'taken') {
@@ -1051,8 +1184,13 @@ class StorageDataService {
         return { success: true, alreadyConfirmed: true, doseLog: log };
       }
       log.status = params.status;
+      log.adherence_status = adherenceStatus;
+      log.source = source;
+      log.recorded_by = params.actorId;
+      log.recorded_by_role = params.actorRole;
       log.confirmed_at = nowIso;
       log.confirmed_by = params.actorId;
+      log.actual_at = nowIso;
       log.skip_reason = params.skipReason;
       log.notes = params.notes;
     } else {
@@ -1065,8 +1203,13 @@ class StorageDataService {
         scheduled_date: params.scheduledDate,
         scheduled_time: params.scheduledTime,
         status: params.status,
+        adherence_status: adherenceStatus,
+        source,
+        recorded_by: params.actorId,
+        recorded_by_role: params.actorRole,
         confirmed_at: nowIso,
         confirmed_by: params.actorId,
+        actual_at: nowIso,
         skip_reason: params.skipReason,
         notes: params.notes,
         created_at: nowIso,
@@ -1083,19 +1226,136 @@ class StorageDataService {
         n.acknowledged_by = params.actorId;
       });
 
-    // Record activity
-    const med = this.inMemoryCache.medications.find(m => m.id === params.medicationId);
+    // Truthful Provenance Attribution description
+    let provenanceDesc = '';
+    if (source === 'caregiver_administered') {
+      provenanceDesc = `Administered by ${params.actorName} — Caretaker. (${med?.name || 'Medication'} ${med?.dosage || ''})`;
+    } else if (source === 'family_reported') {
+      provenanceDesc = `Reported taken by ${params.actorName} — Family Member. (${med?.name || 'Medication'} ${med?.dosage || ''})`;
+    } else if (source === 'self') {
+      provenanceDesc = `${careProfile?.full_name || 'Margaret'} confirmed this dose. (${med?.name || 'Medication'} ${med?.dosage || ''})`;
+    } else {
+      provenanceDesc = `${params.actorName} marked ${med?.name || 'medication'} (${params.scheduledTime}) as ${params.status}.`;
+    }
+
+    log.provenance_description = provenanceDesc;
+
     this.addActivityLog({
       careProfileId: params.careProfileId,
       actorId: params.actorId,
       actorName: params.actorName,
       actorRole: params.actorRole,
       activityType: params.status === 'taken' ? 'dose_taken' : 'dose_skipped',
-      description: `${params.actorName} marked ${med?.name || 'medication'} (${params.scheduledTime}) as ${params.status}${params.skipReason ? `: ${params.skipReason}` : '.'}`,
+      description: provenanceDesc,
     });
 
     this.saveAll();
     return { success: true, alreadyConfirmed, doseLog: log };
+  }
+
+  // --- Append-Only Historical Corrections ---
+  async correctDoseAction(params: {
+    careProfileId: string;
+    originalDoseLogId: string;
+    newStatus: 'taken' | 'skipped';
+    reason: string;
+    actorId?: string;
+    actorName: string;
+    actorRole: string;
+    source?: DoseEventSource;
+    notes?: string;
+  }): Promise<{ success: boolean; error?: string; doseLog?: DoseLog }> {
+    const orig = this.inMemoryCache.doseLogs.find(l => l.id === params.originalDoseLogId);
+    if (!orig) return { success: false, error: 'Original dose record not found.' };
+
+    const res = await this.recordDoseAction({
+      careProfileId: params.careProfileId,
+      medicationId: orig.medication_id,
+      scheduleId: orig.schedule_id,
+      scheduledDate: orig.scheduled_date,
+      scheduledTime: orig.scheduled_time,
+      status: params.newStatus,
+      source: params.source || (params.actorRole === 'caretaker' ? 'caregiver_administered' : 'family_reported'),
+      actorId: params.actorId,
+      actorName: params.actorName,
+      actorRole: params.actorRole,
+      notes: params.notes,
+      isCorrection: true,
+      correctingLogId: params.originalDoseLogId,
+      correctionReason: params.reason,
+    });
+
+    return { success: res.success, error: res.error, doseLog: res.doseLog };
+  }
+
+  // --- No-Response Follow-up Workflow State Machine ---
+  async updateFollowUpStatus(params: {
+    careProfileId: string;
+    doseLogId: string;
+    newStatus: FollowUpStatus;
+    note?: string;
+    actorId?: string;
+    actorName: string;
+    actorRole: string;
+  }): Promise<boolean> {
+    const log = this.inMemoryCache.doseLogs.find(l => l.id === params.doseLogId);
+    if (!log) return false;
+
+    log.follow_up_status = params.newStatus;
+    if (params.newStatus === 'verified_taken') {
+      log.status = 'taken';
+      log.source = params.actorRole === 'caretaker' ? 'caregiver_administered' : 'family_reported';
+      log.confirmed_at = new Date().toISOString();
+      log.confirmed_by = params.actorId;
+    }
+
+    const med = this.inMemoryCache.medications.find(m => m.id === log.medication_id);
+    const statusLabels: Record<FollowUpStatus, string> = {
+      none: 'No follow-up',
+      unconfirmed: 'Unconfirmed dose follow-up opened',
+      contacting: 'Caregiver contacting patient',
+      verified_taken: 'Caregiver verified dose was taken',
+      verified_not_taken: 'Caregiver verified dose was not taken',
+      unable_to_reach: 'Caregiver unable to reach patient',
+      refused_reported: 'Reported: Patient refused dose',
+      escalated: 'Care circle escalated follow-up',
+    };
+
+    this.addActivityLog({
+      careProfileId: params.careProfileId,
+      actorId: params.actorId,
+      actorName: params.actorName,
+      actorRole: params.actorRole,
+      activityType: 'follow_up_updated',
+      description: `${params.actorName} updated follow-up on ${med?.name || 'medication'} (${log.scheduled_time}): ${statusLabels[params.newStatus]}${params.note ? ` — Note: "${params.note}"` : '.'}`,
+    });
+
+    this.saveAll();
+    return true;
+  }
+
+  // --- Update Care Profile Assistance Level ---
+  async updateAssistanceLevel(careProfileId: string, level: AssistanceLevel): Promise<boolean> {
+    const profile = this.inMemoryCache.careProfiles.find(p => p.id === careProfileId);
+    if (!profile) return false;
+
+    profile.assistance_level = level;
+    if (isSupabaseConfigured() && supabase) {
+      await supabase.from('care_profiles').update({ assistance_level: level }).eq('id', careProfileId);
+    }
+
+    const user = this.getCurrentUser();
+    this.addActivityLog({
+      careProfileId,
+      actorId: user?.id,
+      actorName: user?.full_name || 'Care Circle Member',
+      actorRole: user?.role || 'elderly',
+      activityType: 'medication_updated',
+      description: `Assistance mode changed to "${level.replace('_', ' ').toUpperCase()}".`,
+    });
+
+    this.saveAll();
+    return true;
   }
 
   // --- Appointments ---
@@ -1197,9 +1457,6 @@ class StorageDataService {
     if (isSupabaseConfigured() && supabase) {
       const { data } = await supabase.rpc('acknowledge_escalation_alert', {
         p_notification_id: notificationId,
-        p_acknowledged_by: actorId,
-        p_actor_name: actorName,
-        p_actor_role: actorRole,
         p_note: note || null,
       });
       if (data?.success) return true;
@@ -1360,8 +1617,13 @@ class StorageDataService {
   // Reset to original demo seed
   resetToDemoSeed() {
     localStorage.clear();
+    this.failedAttempts = {};
     this.inMemoryCache.initialized = false;
     this.init();
+  }
+
+  resetRateLimits() {
+    this.failedAttempts = {};
   }
 }
 

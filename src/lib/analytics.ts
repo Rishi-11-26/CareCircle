@@ -1,9 +1,10 @@
 import { DoseLog, AdherenceAnalytics } from '@/types';
-import { format, subDays, isBefore, isAfter, startOfDay, endOfDay } from 'date-fns';
+import { format, subDays, isBefore, isAfter, startOfDay } from 'date-fns';
 
 /**
  * Calculates accurate adherence metrics excluding future doses.
- * Adherence % = Confirmed doses / Total eligible past/current doses * 100
+ * Separates on-time, late-confirmed, skipped, and unconfirmed doses.
+ * Adherence % = Confirmed eligible doses (on-time + late) / Total eligible past/current doses * 100
  */
 export function calculateAdherenceMetrics(
   doseLogs: DoseLog[],
@@ -11,18 +12,30 @@ export function calculateAdherenceMetrics(
 ): AdherenceAnalytics {
   const now = new Date();
   const startDate = startOfDay(subDays(now, daysCount - 1));
-  const endDate = endOfDay(now);
 
-  // Filter only eligible doses up to right now (exclude future doses)
+  // Filter only eligible doses up to right now (exclude future doses!)
+  // If dose has scheduled_at, use that; otherwise parse scheduled_date + scheduled_time
   const eligibleLogs = doseLogs.filter(log => {
-    const logDate = new Date(`${log.scheduled_date}T${log.scheduled_time}`);
+    if (log.is_corrected) return false; // Do not double count superseded corrected logs
+
+    let logDate: Date;
+    if (log.scheduled_at) {
+      logDate = new Date(log.scheduled_at);
+    } else {
+      logDate = new Date(`${log.scheduled_date}T${log.scheduled_time || '00:00'}`);
+    }
+
     return !isBefore(logDate, startDate) && !isAfter(logDate, now);
   });
 
   const totalScheduled = eligibleLogs.length;
+  const onTimeCount = eligibleLogs.filter(l => l.status === 'taken' && l.adherence_status === 'on_time').length;
+  const lateCount = eligibleLogs.filter(l => l.status === 'taken' && l.adherence_status === 'late').length;
   const confirmedCount = eligibleLogs.filter(l => l.status === 'taken').length;
   const skippedCount = eligibleLogs.filter(l => l.status === 'skipped').length;
-  const unconfirmedCount = eligibleLogs.filter(l => l.status === 'unconfirmed' || l.status === 'due' || l.status === 'scheduled').length;
+  const unconfirmedCount = eligibleLogs.filter(
+    l => l.status === 'unconfirmed' || l.status === 'due' || l.status === 'scheduled'
+  ).length;
 
   const adherenceRate = totalScheduled > 0 ? Math.round((confirmedCount / totalScheduled) * 100) : 100;
 
@@ -50,6 +63,8 @@ export function calculateAdherenceMetrics(
   return {
     totalScheduled,
     confirmedCount,
+    onTimeCount,
+    lateCount,
     skippedCount,
     unconfirmedCount,
     adherenceRate,

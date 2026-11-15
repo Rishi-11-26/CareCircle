@@ -1,7 +1,9 @@
 import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { CareProvider } from '@/contexts/CareContext';
+import { AccessibilityProvider } from '@/contexts/AccessibilityContext';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { RoleRouteGuard } from '@/components/auth/RoleRouteGuard';
 
 // Lazy-loaded route views for code splitting
 const DashboardPage = lazy(() => import('@/pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
@@ -27,25 +29,75 @@ const PageLoadingFallback: React.FC = () => (
 export const App: React.FC = () => {
   return (
     <CareProvider>
-      <BrowserRouter>
-        <AppLayout>
-          <Suspense fallback={<PageLoadingFallback />}>
-            <Routes>
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/landing" element={<LandingPage />} />
-              <Route path="/medications" element={<MedicationsPage />} />
-              <Route path="/appointments" element={<AppointmentsPage />} />
-              <Route path="/care-circle" element={<CareCirclePage />} />
-              <Route path="/intelligence" element={<CareIntelligencePage />} />
-              <Route path="/timeline" element={<TimelinePage />} />
-              <Route path="/notifications" element={<NotificationsPage />} />
-              <Route path="/analytics" element={<AnalyticsPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Suspense>
-        </AppLayout>
-      </BrowserRouter>
+      <AccessibilityProvider>
+        <BrowserRouter>
+          <AppLayout>
+            <Suspense fallback={<PageLoadingFallback />}>
+              <Routes>
+                {/* Public / Common Routes */}
+                <Route path="/" element={<DashboardPage />} />
+                <Route path="/landing" element={<LandingPage />} />
+                <Route path="/medications" element={<MedicationsPage />} />
+                <Route path="/appointments" element={<AppointmentsPage />} />
+
+                {/* Family-Only Administrative Routes */}
+                <Route
+                  path="/care-circle"
+                  element={
+                    <RoleRouteGuard allowedRoles={['family']}>
+                      <CareCirclePage />
+                    </RoleRouteGuard>
+                  }
+                />
+
+                {/* Family & Caregiver Collaborative Clinical Routes */}
+                <Route
+                  path="/intelligence"
+                  element={
+                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                      <CareIntelligencePage />
+                    </RoleRouteGuard>
+                  }
+                />
+                <Route
+                  path="/timeline"
+                  element={
+                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                      <TimelinePage />
+                    </RoleRouteGuard>
+                  }
+                />
+                <Route
+                  path="/notifications"
+                  element={
+                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                      <NotificationsPage />
+                    </RoleRouteGuard>
+                  }
+                />
+                <Route
+                  path="/analytics"
+                  element={
+                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                      <AnalyticsPage />
+                    </RoleRouteGuard>
+                  }
+                />
+                <Route
+                  path="/settings"
+                  element={
+                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                      <SettingsPage />
+                    </RoleRouteGuard>
+                  }
+                />
+
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+          </AppLayout>
+        </BrowserRouter>
+      </AccessibilityProvider>
     </CareProvider>
   );
 };

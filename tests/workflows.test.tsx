@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CareProvider, useCare } from '@/contexts/CareContext';
+import { AccessibilityProvider } from '@/contexts/AccessibilityContext';
 import { DoseCard } from '@/components/medications/DoseCard';
 import { dataService, generateSeedData } from '@/services/storageAdapter';
 import { Medication, DoseLog } from '@/types';
@@ -21,12 +22,14 @@ const TestDoseCardWrapper = ({
 }) => {
   return (
     <CareProvider>
-      <DoseCard
-        medication={med}
-        scheduleTime={time}
-        scheduledDate={date}
-        doseLog={doseLog}
-      />
+      <AccessibilityProvider>
+        <DoseCard
+          medication={med}
+          scheduleTime={time}
+          scheduledDate={date}
+          doseLog={doseLog}
+        />
+      </AccessibilityProvider>
     </CareProvider>
   );
 };

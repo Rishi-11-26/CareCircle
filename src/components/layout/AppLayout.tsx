@@ -2,6 +2,7 @@ import React from 'react';
 import { Navbar } from './Navbar';
 import { Footer } from './Footer';
 import { SupabaseStatusBanner } from '../common/SupabaseStatusBanner';
+import { DemoRoleSwitcher } from '../common/DemoRoleSwitcher';
 
 export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return (
@@ -12,6 +13,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         {children}
       </main>
       <Footer />
+      <DemoRoleSwitcher />
     </div>
   );
 };

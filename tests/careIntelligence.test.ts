@@ -9,6 +9,8 @@ describe('Care Intelligence Engine (Rule-based & Evidence-traceable)', () => {
     owner_id: 'u1',
     full_name: 'Margaret Hayes',
     preferred_name: 'Margaret',
+    assistance_level: 'independent',
+    timezone: 'America/Los_Angeles',
   };
 
   const today = format(new Date(), 'yyyy-MM-dd');

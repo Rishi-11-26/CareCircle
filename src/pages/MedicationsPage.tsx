@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useCare } from '@/contexts/CareContext';
 import { Medication } from '@/types';
 import { MedicationModal } from '@/components/medications/MedicationModal';
+import { CallFamilyModal } from '@/components/common/CallFamilyModal';
 import {
   Pill,
   Plus,
@@ -12,6 +13,7 @@ import {
   Trash2,
   CheckCircle2,
   Shield,
+  Phone,
 } from 'lucide-react';
 import { format, differenceInDays } from 'date-fns';
 
@@ -20,9 +22,10 @@ export const MedicationsPage: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingMed, setEditingMed] = useState<Medication | undefined>(undefined);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [callFamilyModalOpen, setCallFamilyModalOpen] = useState(false);
 
-  const canManage =
-    currentUser.role === 'elderly' || currentUser.role === 'caretaker';
+  const isElderly = currentUser.role === 'elderly';
+  const canManage = currentUser.role === 'caretaker' || currentUser.role === 'family';
 
   const handleEdit = (med: Medication) => {
     setEditingMed(med);
@@ -51,20 +54,33 @@ export const MedicationsPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-stone pb-5">
         <div>
           <h1 className="font-serif text-3xl sm:text-4xl font-bold text-forest">
-            Prescription Medications
+            {isElderly ? 'My Medicines' : 'Prescription Medications'}
           </h1>
           <p className="text-sm text-charcoal-light mt-1">
-            Active medication schedules, dosage instructions, and upcoming refill alerts.
+            {isElderly
+              ? 'Here is your list of daily medications, dosage amounts, and schedule instructions.'
+              : 'Active medication schedules, dosage instructions, and upcoming refill alerts.'}
           </p>
         </div>
 
         {canManage && (
           <button
             onClick={handleAddNew}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-forest text-ivory text-sm font-bold hover:bg-forest-light shadow-warm touch-target-elderly"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-forest text-ivory text-sm font-bold hover:bg-forest-light shadow-warm touch-target-elderly cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Add Medication</span>
+          </button>
+        )}
+
+        {isElderly && (
+          <button
+            onClick={() => setCallFamilyModalOpen(true)}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-terracotta hover:bg-terracotta-dark text-ivory text-sm font-bold shadow-warm touch-target-elderly cursor-pointer"
+            aria-label="Call Family"
+          >
+            <Phone className="w-4 h-4" />
+            <span>Call Family</span>
           </button>
         )}
       </div>
@@ -185,6 +201,33 @@ export const MedicationsPage: React.FC = () => {
         })}
       </div>
 
+      {/* Reassuring Call Family Assistance Card for Elderly */}
+      {isElderly && (
+        <div className="bg-gradient-to-r from-cream-light via-ivory to-stone-light/50 border-2 border-stone rounded-3xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-warm-xs">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-terracotta/10 text-terracotta flex items-center justify-center shrink-0">
+              <Phone className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-serif text-lg sm:text-xl font-bold text-forest">
+                Have questions about your medicines?
+              </h3>
+              <p className="text-xs sm:text-sm text-charcoal-light">
+                Call your family circle or caregiver anytime for assistance or clarification.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setCallFamilyModalOpen(true)}
+            className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl bg-terracotta hover:bg-terracotta-dark text-ivory text-base font-bold shadow-warm touch-target-elderly cursor-pointer shrink-0"
+            aria-label="Call Family"
+          >
+            <Phone className="w-5 h-5" />
+            <span>Call Family</span>
+          </button>
+        </div>
+      )}
+
       {isModalOpen && (
         <MedicationModal
           isOpen={isModalOpen}
@@ -195,6 +238,11 @@ export const MedicationsPage: React.FC = () => {
           medicationToEdit={editingMed}
         />
       )}
+
+      <CallFamilyModal
+        isOpen={callFamilyModalOpen}
+        onClose={() => setCallFamilyModalOpen(false)}
+      />
     </div>
   );
 };

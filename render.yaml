@@ -1,0 +1,27 @@
+# ============================================================================
+# CARECIRCLE — RENDER DEPLOYMENT BLUEPRINT
+# Integrated Single-Service Architecture: React SPA + API + Scheduler
+# ============================================================================
+
+services:
+  - type: web
+    name: carecircle
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: VITE_SUPABASE_URL
+        value: https://irkbphurzdhghptwfemz.supabase.co
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: CRON_SECRET
+        generateValue: true

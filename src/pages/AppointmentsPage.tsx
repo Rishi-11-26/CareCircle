@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useCare } from '@/contexts/CareContext';
 import { Appointment } from '@/types';
 import { AppointmentModal } from '@/components/appointments/AppointmentModal';
+import { DoctorVisitBriefModal } from '@/components/appointments/DoctorVisitBriefModal';
+import { CallFamilyModal } from '@/components/common/CallFamilyModal';
 import {
   Calendar,
   Clock,
@@ -11,17 +13,21 @@ import {
   CheckCircle2,
   AlertCircle,
   FileText,
+  Printer,
+  Phone,
 } from 'lucide-react';
-import { format, isAfter, isBefore, parseISO } from 'date-fns';
+import { format, isAfter, isBefore, parseISO, differenceInHours } from 'date-fns';
 
 export const AppointmentsPage: React.FC = () => {
   const { appointments, cancelAppointment, currentUser } = useCare();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingApt, setEditingApt] = useState<Appointment | undefined>(undefined);
+  const [briefApt, setBriefApt] = useState<Appointment | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [callFamilyModalOpen, setCallFamilyModalOpen] = useState(false);
 
-  const canManage =
-    currentUser.role === 'elderly' || currentUser.role === 'caretaker' || currentUser.role === 'family';
+  const isElderly = currentUser.role === 'elderly';
+  const canManage = currentUser.role === 'caretaker' || currentUser.role === 'family';
 
   const now = new Date();
 
@@ -50,10 +56,12 @@ export const AppointmentsPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-stone pb-5">
         <div>
           <h1 className="font-serif text-3xl sm:text-4xl font-bold text-forest">
-            Medical Appointments
+            {isElderly ? 'Doctor Visits' : 'Medical Appointments'}
           </h1>
           <p className="text-sm text-charcoal-light mt-1">
-            Doctor visits, specialist consultations, and appointment preparation notes.
+            {isElderly
+              ? 'Your upcoming appointments, physician visits, and clinical preparation notes.'
+              : 'Doctor visits, specialist consultations, and appointment preparation notes.'}
           </p>
         </div>
 
@@ -63,10 +71,21 @@ export const AppointmentsPage: React.FC = () => {
               setEditingApt(undefined);
               setIsModalOpen(true);
             }}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-forest text-ivory text-sm font-bold hover:bg-forest-light shadow-warm touch-target-elderly"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-forest text-ivory text-sm font-bold hover:bg-forest-light shadow-warm touch-target-elderly cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Schedule Appointment</span>
+          </button>
+        )}
+
+        {isElderly && (
+          <button
+            onClick={() => setCallFamilyModalOpen(true)}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-terracotta hover:bg-terracotta-dark text-ivory text-sm font-bold shadow-warm touch-target-elderly cursor-pointer"
+            aria-label="Call Family"
+          >
+            <Phone className="w-4 h-4" />
+            <span>Call Family</span>
           </button>
         )}
       </div>
@@ -102,14 +121,16 @@ export const AppointmentsPage: React.FC = () => {
                       </h3>
                     </div>
 
-                    <button
-                      onClick={() => handleCancel(apt.id)}
-                      disabled={cancellingId === apt.id}
-                      className="text-xs text-charcoal-muted hover:text-terracotta p-1.5 rounded-lg hover:bg-stone-light transition-colors"
-                      title="Cancel appointment"
-                    >
-                      Cancel
-                    </button>
+                    {canManage && (
+                      <button
+                        onClick={() => handleCancel(apt.id)}
+                        disabled={cancellingId === apt.id}
+                        className="text-xs text-charcoal-muted hover:text-terracotta p-1.5 rounded-lg hover:bg-stone-light transition-colors cursor-pointer"
+                        title="Cancel appointment"
+                      >
+                        Cancel
+                      </button>
+                    )}
                   </div>
 
                   <div className="space-y-2 text-sm text-charcoal">
@@ -138,12 +159,18 @@ export const AppointmentsPage: React.FC = () => {
                   )}
                 </div>
 
-                <div className="pt-3 border-t border-stone/50 flex items-center justify-between text-xs text-charcoal-muted">
+                <div className="pt-3 border-t border-stone/50 flex flex-wrap items-center justify-between gap-2 text-xs text-charcoal-muted">
                   <span className="inline-flex items-center gap-1 text-forest font-medium">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     Reminder Active
                   </span>
-                  <span>Scheduled for circle review</span>
+                  <button
+                    onClick={() => setBriefApt(apt)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cream-light hover:bg-stone text-forest font-semibold border border-stone/60 transition-colors cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Clinical Brief</span>
+                  </button>
                 </div>
               </div>
             ))}
@@ -181,6 +208,33 @@ export const AppointmentsPage: React.FC = () => {
         </section>
       )}
 
+      {/* Reassuring Call Family Assistance Card for Elderly */}
+      {isElderly && (
+        <div className="bg-gradient-to-r from-cream-light via-ivory to-stone-light/50 border-2 border-stone rounded-3xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-warm-xs">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-terracotta/10 text-terracotta flex items-center justify-center shrink-0">
+              <Phone className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-serif text-lg sm:text-xl font-bold text-forest">
+                Need a ride or companion for your visit?
+              </h3>
+              <p className="text-xs sm:text-sm text-charcoal-light">
+                Let your family know in advance so they can accompany you to your appointment.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setCallFamilyModalOpen(true)}
+            className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl bg-terracotta hover:bg-terracotta-dark text-ivory text-base font-bold shadow-warm touch-target-elderly cursor-pointer shrink-0"
+            aria-label="Call Family"
+          >
+            <Phone className="w-4 h-4" />
+            <span>Call Family</span>
+          </button>
+        </div>
+      )}
+
       {isModalOpen && (
         <AppointmentModal
           isOpen={isModalOpen}
@@ -191,6 +245,18 @@ export const AppointmentsPage: React.FC = () => {
           appointmentToEdit={editingApt}
         />
       )}
+
+      {briefApt && (
+        <DoctorVisitBriefModal
+          appointment={briefApt}
+          onClose={() => setBriefApt(null)}
+        />
+      )}
+
+      <CallFamilyModal
+        isOpen={callFamilyModalOpen}
+        onClose={() => setCallFamilyModalOpen(false)}
+      />
     </div>
   );
 };
