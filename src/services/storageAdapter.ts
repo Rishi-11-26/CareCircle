@@ -587,6 +587,7 @@ export function generateSeedData() {
 }
 
 class StorageDataService {
+  private isDemoMode: boolean = false;
   private inMemoryCache: {
     initialized: boolean;
     currentUser: UserProfile | null;
@@ -713,16 +714,31 @@ class StorageDataService {
     return targetUser;
   }
 
+  setDemoMode(enabled: boolean) {
+    this.isDemoMode = enabled;
+  }
+
+  isDemoModeActive(): boolean {
+    if (this.isDemoMode) return true;
+    try {
+      if (typeof window !== 'undefined') {
+        const flag = localStorage.getItem('carecircle_demo_mode');
+        if (flag === 'true') return true;
+      }
+    } catch {}
+    return false;
+  }
+
   // --- Care Profiles & Members ---
   getInitialCareProfile(): CareProfile | null {
-    if (isSupabaseConfigured()) {
+    if (!this.isDemoModeActive() && isSupabaseConfigured()) {
       return null;
     }
     return this.inMemoryCache.careProfiles[0] || null;
   }
 
   async getCareProfiles(): Promise<CareProfile[]> {
-    if (isSupabaseConfigured() && supabase) {
+    if (!this.isDemoModeActive() && isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase.from('care_profiles').select('*');
       if (error) {
         console.warn('[StorageAdapter] getCareProfiles query error:', error.message);
@@ -832,7 +848,7 @@ class StorageDataService {
   }
 
   async getCareMembers(careProfileId: string): Promise<CareMember[]> {
-    if (isSupabaseConfigured() && supabase) {
+    if (!this.isDemoModeActive() && isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase
         .from('care_members')
         .select('*, profile:profiles(*)')
@@ -1007,7 +1023,7 @@ class StorageDataService {
 
   // --- Medications & Schedules ---
   async getMedications(careProfileId: string): Promise<Medication[]> {
-    if (isSupabaseConfigured() && supabase) {
+    if (!this.isDemoModeActive() && isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase
         .from('medications')
         .select('*, schedules:medication_schedules(*)')
@@ -1120,7 +1136,7 @@ class StorageDataService {
   // --- Dose Tracking & Confirmation ---
   async getDoseLogs(careProfileId: string): Promise<DoseLog[]> {
     let logs: DoseLog[] = [];
-    if (isSupabaseConfigured() && supabase) {
+    if (!this.isDemoModeActive() && isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase
         .from('dose_logs')
         .select('*, medication:medications(*)')
@@ -1465,7 +1481,7 @@ class StorageDataService {
 
   // --- Appointments ---
   async getAppointments(careProfileId: string): Promise<Appointment[]> {
-    if (isSupabaseConfigured() && supabase) {
+    if (!this.isDemoModeActive() && isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase
         .from('appointments')
         .select('*')
@@ -1539,7 +1555,7 @@ class StorageDataService {
 
   // --- Notifications & Escalation Acknowledgement ---
   async getNotifications(careProfileId: string): Promise<Notification[]> {
-    if (isSupabaseConfigured() && supabase) {
+    if (!this.isDemoModeActive() && isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase
         .from('notifications')
         .select('*')
@@ -1683,7 +1699,7 @@ class StorageDataService {
 
   // --- Shared Activity Timeline ---
   async getActivityLogs(careProfileId: string): Promise<ActivityLog[]> {
-    if (isSupabaseConfigured() && supabase) {
+    if (!this.isDemoModeActive() && isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase
         .from('activity_logs')
         .select('*')

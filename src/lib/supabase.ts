@@ -44,10 +44,13 @@ export async function signUpUser(params: {
     return { user: null, session: null, error: 'Database is not configured' };
   }
 
+  const redirectOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://carecircle.onrender.com';
+
   const { data, error } = await supabase.auth.signUp({
     email: params.email.trim().toLowerCase(),
     password: params.password,
     options: {
+      emailRedirectTo: `${redirectOrigin}/`,
       data: {
         full_name: params.fullName.trim(),
         role: params.role,

@@ -149,11 +149,18 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Demo mode detection
   const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
-    if (!isSupabaseConfigured()) return true;
+    const forcedDemo = localStorage.getItem('carecircle_demo_mode');
+    if (forcedDemo === 'true') {
+      dataService.setDemoMode(true);
+      return true;
+    }
+    if (!isSupabaseConfigured()) {
+      dataService.setDemoMode(true);
+      return true;
+    }
     const prodMode = localStorage.getItem('carecircle_production_mode') === 'true';
     if (prodMode) return false;
-    const forcedDemo = localStorage.getItem('carecircle_demo_mode');
-    return forcedDemo === 'true';
+    return false;
   });
 
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
@@ -350,10 +357,12 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const setDemoMode = (enabled: boolean) => {
     setIsDemoMode(enabled);
     localStorage.setItem('carecircle_demo_mode', enabled ? 'true' : 'false');
+    dataService.setDemoMode(enabled);
     if (enabled) {
       dataService.resetToDemoSeed();
       const newUser = dataService.getCurrentUser() || dataService.switchUserRole('elderly');
       setCurrentUser(newUser);
+      localStorage.setItem('carecircle_selected_profile_id', 'profile_margaret');
     }
     refreshData();
   };

@@ -4,7 +4,7 @@ import { useCare } from '@/contexts/CareContext';
 import { NoCircleOnboarding } from '@/components/care-circle/NoCircleOnboarding';
 
 export const AuthRouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, authLoading, isLoading, careProfile, careProfiles } = useCare();
+  const { isAuthenticated, authLoading, isLoading, careProfile, careProfiles, isDemoMode } = useCare();
   const location = useLocation();
 
   if (authLoading) {
@@ -22,8 +22,8 @@ export const AuthRouteGuard: React.FC<{ children: React.ReactNode }> = ({ childr
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  // If user is authenticated but has not yet joined or created any care circle
-  if (!isLoading && (!careProfile || careProfiles.length === 0)) {
+  // If user is authenticated in real production mode (not demo mode) but has not yet joined or created any care circle
+  if (!isDemoMode && !isLoading && (!careProfile || careProfiles.length === 0)) {
     return <NoCircleOnboarding />;
   }
 
