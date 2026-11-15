@@ -763,44 +763,46 @@ class StorageDataService {
     ownerId?: string;
   }): Promise<CareProfile> {
     const defaultTz = params.timezone || DEFAULT_PROFILE_TIMEZONE;
+    const isValidUUID = (id?: string) =>
+      Boolean(id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
 
-    if (isSupabaseConfigured() && supabase) {
+    if (!this.isDemoModeActive() && isSupabaseConfigured() && supabase) {
       let ownerId = params.ownerId;
-      if (!ownerId) {
+      if (!ownerId || !isValidUUID(ownerId)) {
         const { data: authData } = await supabase.auth.getUser();
         ownerId = authData.user?.id;
       }
-      if (!ownerId) {
-        throw new Error('Authenticated user ID is required to create a care profile');
+
+      if (ownerId && isValidUUID(ownerId)) {
+        const payload = {
+          owner_id: ownerId,
+          full_name: params.fullName.trim(),
+          preferred_name: params.preferredName?.trim() || null,
+          date_of_birth: params.dateOfBirth || null,
+          blood_group: params.bloodGroup?.trim() || null,
+          allergies: params.allergies || [],
+          emergency_phone: params.emergencyPhone?.trim() || null,
+          address: params.address?.trim() || null,
+          medical_notes: params.medicalNotes?.trim() || null,
+          assistance_level: params.assistanceLevel || 'independent',
+          timezone: defaultTz,
+        };
+
+        const { data, error } = await supabase
+          .from('care_profiles')
+          .insert(payload)
+          .select()
+          .single();
+
+        if (error) {
+          console.warn('[StorageAdapter] Supabase care profile insert error:', error.message);
+        } else if (data) {
+          return data as CareProfile;
+        }
       }
-
-      const payload = {
-        owner_id: ownerId,
-        full_name: params.fullName.trim(),
-        preferred_name: params.preferredName?.trim() || null,
-        date_of_birth: params.dateOfBirth || null,
-        blood_group: params.bloodGroup?.trim() || null,
-        allergies: params.allergies || [],
-        emergency_phone: params.emergencyPhone?.trim() || null,
-        address: params.address?.trim() || null,
-        medical_notes: params.medicalNotes?.trim() || null,
-        assistance_level: params.assistanceLevel || 'independent',
-        timezone: defaultTz,
-      };
-
-      const { data, error } = await supabase
-        .from('care_profiles')
-        .insert(payload)
-        .select()
-        .single();
-
-      if (error) {
-        throw new Error(`Failed to create care profile: ${error.message}`);
-      }
-      return data as CareProfile;
     }
 
-    // In-memory fallback for local demo or tests
+    // In-memory / local fallback
     const newId = `profile_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const newOwnerId = params.ownerId || this.getCurrentUser()?.id || 'user_margaret';
 

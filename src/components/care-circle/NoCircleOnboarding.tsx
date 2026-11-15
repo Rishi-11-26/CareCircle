@@ -338,7 +338,10 @@ export const NoCircleOnboarding: React.FC = () => {
           <div className="mt-8 pt-6 border-t border-stone/80 text-center">
             <button
               type="button"
-              onClick={() => setDemoMode(true)}
+              onClick={() => {
+                setDemoMode(true);
+                window.location.href = '/';
+              }}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-forest bg-forest/5 hover:bg-forest/10 border border-forest/20 transition-all cursor-pointer"
             >
               <Sparkles className="w-3.5 h-3.5 text-terracotta" />

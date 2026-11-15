@@ -48,7 +48,7 @@ export const LoginPage: React.FC = () => {
 
   const handleLaunchDemo = () => {
     setDemoMode(true);
-    navigate('/', { replace: true });
+    window.location.href = '/';
   };
 
   return (
