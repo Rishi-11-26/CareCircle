@@ -1094,30 +1094,6 @@ BEGIN
 END;
 $$;
 
-    -- 11. Auto-resolve pending unconfirmed escalation notifications
-    UPDATE public.notifications
-    SET status = 'resolved', acknowledged_at = v_now, acknowledged_by = v_caller_id
-    WHERE category = 'unconfirmed_escalation'
-      AND care_profile_id = p_care_profile_id
-      AND metadata->>'dose_identity' = v_dose_identity;
-
-    -- 12. Record Activity Timeline Entry
-    INSERT INTO public.activity_logs (
-        care_profile_id, actor_id, actor_name, actor_role, activity_type, description
-    ) VALUES (
-        p_care_profile_id, v_caller_id,
-        COALESCE((SELECT full_name FROM public.profiles WHERE id = v_caller_id), 'Care Circle Member'),
-        v_caller_role,
-        CASE WHEN p_status = 'taken' THEN 'dose_taken' ELSE 'dose_skipped' END,
-        v_medication.name || ' (' || v_medication.dosage || ') ' ||
-        CASE WHEN p_status = 'taken' THEN 'confirmed taken' ELSE 'marked skipped' END ||
-        ' via ' || p_source || '.'
-    );
-
-    RETURN jsonb_build_object('success', true, 'already_confirmed', false, 'log', row_to_json(v_new_log));
-END;
-$$;
-
 -- ----------------------------------------------------------------------------
 -- RPC 3: acknowledge_escalation_alert
 -- Validates caller identity from auth.uid(), checks active circle membership
