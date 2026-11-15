@@ -124,7 +124,7 @@ describe('Supabase Authentication & Session Test Suite', () => {
       expect(screen.getByLabelText(/Email Address/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/^Password/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Sign In/i })).toBeInTheDocument();
-      expect(screen.getByText(/Hackathon Evaluator Quick Access/i)).toBeInTheDocument();
+      expect(screen.getByText(/Explore Demo Mode/i)).toBeInTheDocument();
 
       fireEvent.change(screen.getByLabelText(/Email Address/i), {
         target: { value: 'david@example.com' },

@@ -282,7 +282,7 @@ export const Navbar: React.FC = () => {
             {isDemoMode && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-terracotta/10 text-terracotta font-extrabold uppercase tracking-wider flex items-center gap-1 border border-terracotta/20">
                 <Sparkles className="w-3 h-3" />
-                <span>Demo Persona Mode</span>
+                <span>Demo Mode</span>
               </span>
             )}
           </div>

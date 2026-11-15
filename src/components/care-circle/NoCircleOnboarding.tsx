@@ -334,18 +334,15 @@ export const NoCircleOnboarding: React.FC = () => {
             </form>
           )}
 
-          {/* Evaluator Shortcut */}
-          <div className="mt-8 pt-6 border-t border-stone/80 text-center space-y-2">
-            <span className="text-xs text-charcoal-muted block">
-              Evaluating CareCircle for hackathon review?
-            </span>
+          {/* Demo Mode Shortcut */}
+          <div className="mt-8 pt-6 border-t border-stone/80 text-center">
             <button
               type="button"
               onClick={() => setDemoMode(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-forest bg-forest/5 hover:bg-forest/10 border border-forest/20 transition-all cursor-pointer"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-forest bg-forest/5 hover:bg-forest/10 border border-forest/20 transition-all cursor-pointer"
             >
               <Sparkles className="w-3.5 h-3.5 text-terracotta" />
-              <span>Load Margaret Hayes Evaluator Demo Circle</span>
+              <span>Explore Demo Mode</span>
             </button>
           </div>
         </div>

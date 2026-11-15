@@ -142,9 +142,9 @@ describe('Role-Based Navigation & Accessibility Suite', () => {
     );
 
     // Collapsed launcher is present by default
-    const launcherBtn = screen.getByRole('button', { name: /open demo evaluator persona switcher/i });
+    const launcherBtn = screen.getByRole('button', { name: /open demo role switcher/i });
     expect(launcherBtn).toBeInTheDocument();
-    expect(screen.getByText(/Demo Switcher \(Margaret\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Demo Mode \(Margaret\)/i)).toBeInTheDocument();
 
     // Expanded role buttons are not yet visible
     expect(screen.queryByTitle(/switch to david hayes/i)).not.toBeInTheDocument();

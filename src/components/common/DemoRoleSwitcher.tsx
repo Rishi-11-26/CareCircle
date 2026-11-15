@@ -35,17 +35,17 @@ export const DemoRoleSwitcher: React.FC = () => {
   if (isCollapsed) {
     return (
       <aside
-        aria-label="Evaluation persona simulator"
+        aria-label="Demo mode role switcher"
         className="fixed bottom-3 right-3 z-30 print:hidden transition-all duration-200"
       >
         <button
           onClick={() => setIsCollapsed(false)}
           className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-charcoal/90 hover:bg-charcoal text-ivory text-xs font-semibold shadow-warm-md border border-white/20 transition-all cursor-pointer opacity-90 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-forest"
-          aria-label="Open Demo Evaluator Persona Switcher"
+          aria-label="Open Demo Role Switcher"
           title="Click to switch simulated demo roles (Margaret, David, Elena)"
         >
           <Sparkles className="w-3.5 h-3.5 text-sage-light shrink-0" />
-          <span className="font-sans">Demo Switcher ({(currentUser?.full_name || 'User').split(' ')[0]})</span>
+          <span className="font-sans">Demo Mode ({(currentUser?.full_name || 'User').split(' ')[0]})</span>
           <ChevronUp className="w-3 h-3 text-ivory/70 shrink-0" />
         </button>
       </aside>
@@ -55,14 +55,14 @@ export const DemoRoleSwitcher: React.FC = () => {
   // Expanded Mode: Clean, non-intrusive modal dock
   return (
     <aside
-      aria-label="Evaluation persona simulator"
+      aria-label="Demo mode role switcher"
       className="fixed bottom-3 right-3 z-30 print:hidden transition-all duration-200"
     >
       <div className="bg-charcoal/95 backdrop-blur-md text-ivory border border-stone-dark/50 rounded-2xl shadow-2xl p-3 max-w-sm w-80 animate-in fade-in slide-in-from-bottom-2 duration-150">
         <div className="flex items-center justify-between gap-3 px-1 pb-1.5 border-b border-white/10 text-xs">
           <div className="flex items-center gap-1.5 font-bold tracking-wide text-sage-light">
             <Sparkles className="w-3.5 h-3.5 text-terracotta-light" />
-            <span>Demo Evaluator Mode</span>
+            <span>Demo Mode</span>
           </div>
           <div className="flex items-center gap-1">
             <button
@@ -86,7 +86,7 @@ export const DemoRoleSwitcher: React.FC = () => {
 
         <div className="pt-2 space-y-2">
           <p className="text-[11px] text-ivory/70 px-1 leading-snug">
-            Simulate authenticated user personas for evaluation:
+            Simulate role personas in Demo Mode:
           </p>
           <div className="flex items-center gap-1.5">
             <button

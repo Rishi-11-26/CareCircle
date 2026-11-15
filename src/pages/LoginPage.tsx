@@ -170,18 +170,15 @@ export const LoginPage: React.FC = () => {
               </Link>
             </p>
 
-            {/* Quick Demo Mode Access for Hackathon Reviewers */}
-            <div className="bg-stone-light/60 p-3.5 rounded-2xl border border-stone">
-              <span className="block text-[11px] font-semibold text-charcoal-muted mb-2">
-                Hackathon Evaluator Quick Access:
-              </span>
+            {/* Demo Mode Access */}
+            <div className="bg-stone-light/60 p-3 rounded-2xl border border-stone">
               <button
                 type="button"
                 onClick={handleLaunchDemo}
                 className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-forest bg-forest/10 hover:bg-forest/20 border border-forest/30 transition-all cursor-pointer flex items-center justify-center gap-2"
               >
                 <Sparkles className="w-4 h-4 text-terracotta" />
-                <span>Explore with Margaret Hayes Persona (Demo Mode)</span>
+                <span>Explore Demo Mode</span>
               </button>
             </div>
           </div>
