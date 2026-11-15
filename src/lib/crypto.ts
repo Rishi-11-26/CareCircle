@@ -1,14 +1,22 @@
 /**
  * Cryptographic helpers for CareCircle Passcode Access
- * Uses the Web Crypto API for secure random generation and SHA-256 hashing.
+ * Uses Web Crypto API for secure random generation and SHA-256 hashing.
+ * Uses an unambiguous alphanumeric charset (excluding 0, O, 1, I) to prevent
+ * elderly reading confusion while providing over 1.07 billion random combinations (>30 bits entropy).
  */
 
+const UNAMBIGUOUS_CHARSET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // 32 characters
+
 export function generatePasscode(): string {
-  // Generate a random 4-digit numeric code with CARE- prefix for high elderly clarity
-  const array = new Uint16Array(1);
-  crypto.getRandomValues(array);
-  const code = (1000 + (array[0] % 9000)).toString();
-  return `CARE-${code}`;
+  const length = 6;
+  const randomBytes = new Uint8Array(length);
+  crypto.getRandomValues(randomBytes);
+  
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += UNAMBIGUOUS_CHARSET[randomBytes[i] % UNAMBIGUOUS_CHARSET.length];
+  }
+  return `CARE-${result}`;
 }
 
 export async function hashPasscode(passcode: string): Promise<string> {
@@ -21,6 +29,6 @@ export async function hashPasscode(passcode: string): Promise<string> {
 }
 
 export function maskPasscodeHint(passcode: string): string {
-  if (!passcode || passcode.length < 5) return '***';
-  return `${passcode.slice(0, 5)}***`;
+  if (!passcode || passcode.length < 6) return 'CARE-***';
+  return `${passcode.slice(0, 7)}***`;
 }

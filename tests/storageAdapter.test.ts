@@ -41,13 +41,13 @@ describe('Storage Data Service & Workflows', () => {
     const invite = await dataService.createInvitation({
       careProfileId: seed.careProfile.id,
       role: 'family',
-      passcode: 'CARE-9999',
+      passcode: 'CARE-999999',
       inviterId: seed.elderlyUser.id,
     });
 
     expect(invite.id).toBeDefined();
     expect(invite.status).toBe('pending');
-    expect(invite.code_hint).toBe('CARE-***');
+    expect(invite.code_hint).toBe('CARE-99***');
 
     const newUser = {
       id: 'user_alex',
@@ -57,17 +57,38 @@ describe('Storage Data Service & Workflows', () => {
     };
 
     // Redeem with wrong passcode should fail
-    const failResult = await dataService.redeemInvitation('CARE-0000', newUser);
+    const failResult = await dataService.redeemInvitation('CARE-000000', newUser);
     expect(failResult.success).toBe(false);
 
     // Redeem with valid passcode should succeed
-    const successResult = await dataService.redeemInvitation('CARE-9999', newUser);
+    const successResult = await dataService.redeemInvitation('CARE-999999', newUser);
     expect(successResult.success).toBe(true);
     expect(successResult.careProfileId).toBe(seed.careProfile.id);
 
     // Re-redeeming already redeemed code should fail
-    const secondRedeem = await dataService.redeemInvitation('CARE-9999', newUser);
+    const secondRedeem = await dataService.redeemInvitation('CARE-999999', newUser);
     expect(secondRedeem.success).toBe(false);
+  });
+
+  it('enforces rate limiting after 5 failed passcode attempts', async () => {
+    const seed = generateSeedData();
+    const attackerUser = {
+      id: 'user_bruteforce',
+      email: 'attacker@example.org',
+      full_name: 'Attacker',
+      role: 'family' as const,
+    };
+
+    // 5 failed attempts
+    for (let i = 0; i < 5; i++) {
+      const res = await dataService.redeemInvitation(`CARE-FAIL0${i}`, attackerUser);
+      expect(res.success).toBe(false);
+    }
+
+    // 6th attempt should be blocked by rate-limiting
+    const lockedRes = await dataService.redeemInvitation('CARE-FAIL06', attackerUser);
+    expect(lockedRes.success).toBe(false);
+    expect(lockedRes.error).toContain('Too many failed passcode attempts');
   });
 
   it('records caregiver acknowledgement of escalation alert and logs to activity timeline', async () => {
@@ -95,5 +116,23 @@ describe('Storage Data Service & Workflows', () => {
     const ackLog = activity.find(a => a.activity_type === 'alert_acknowledged');
     expect(ackLog).toBeDefined();
     expect(ackLog?.description).toContain('acknowledged follow-up alert');
+  });
+
+  it('cancels appointment and updates status without generating duplicate active records', async () => {
+    const seed = generateSeedData();
+    const apts = await dataService.getAppointments(seed.careProfile.id);
+    expect(apts.length).toBeGreaterThan(0);
+
+    const targetApt = apts[0];
+    const cancelled = await dataService.cancelAppointment(targetApt.id);
+    expect(cancelled).toBe(true);
+
+    const updatedApts = await dataService.getAppointments(seed.careProfile.id);
+    const updated = updatedApts.find(a => a.id === targetApt.id);
+    expect(updated?.status).toBe('cancelled');
+
+    const activity = await dataService.getActivityLogs(seed.careProfile.id);
+    const cancelLog = activity.find(a => a.activity_type === 'appointment_cancelled');
+    expect(cancelLog).toBeDefined();
   });
 });

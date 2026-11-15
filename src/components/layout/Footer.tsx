@@ -37,7 +37,7 @@ export const Footer: React.FC = () => {
         </div>
 
         <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-charcoal-muted pt-2 border-t border-stone/50">
-          <span>&copy; {new Date().getFullYear()} CareCircle. Built for Catalyst Solo Hackathon.</span>
+          <span>&copy; {new Date().getFullYear()} CareCircle. All rights reserved.</span>
           <span>Designed with Warm Editorial Healthcare Aesthetics</span>
         </div>
       </div>

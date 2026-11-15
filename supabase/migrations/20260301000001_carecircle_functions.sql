@@ -1,9 +1,20 @@
 -- ============================================================================
 -- CARECIRCLE STORED PROCEDURES & RPC FUNCTIONS
--- Secure Passcode Verification, Dose Confirmation & Caregiver Acknowledgement
+-- Secure Passcode Verification, Rate Limiting, Dose Confirmation & Caregiver Acknowledgement
 -- ============================================================================
 
--- Function to redeem an invitation passcode securely
+-- Table to track failed passcode redemption attempts for rate limiting
+CREATE TABLE IF NOT EXISTS public.invitation_redemption_attempts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    attempted_at TIMESTAMPTZ DEFAULT NOW(),
+    success BOOLEAN DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_invite_attempts_user
+    ON public.invitation_redemption_attempts(user_id, attempted_at DESC);
+
+-- Function to redeem an invitation passcode securely with server-side rate limiting
 CREATE OR REPLACE FUNCTION public.redeem_invitation(
     p_code TEXT,
     p_user_id UUID
@@ -19,34 +30,62 @@ DECLARE
     v_profile RECORD;
     v_care_profile RECORD;
     v_existing_member RECORD;
+    v_failed_attempts INTEGER;
 BEGIN
-    -- Compute sha256 hash of the normalized upper-trimmed passcode
+    -- 1. Server-side Rate Limiting: Max 5 failed attempts per 15 minutes
+    SELECT COUNT(*) INTO v_failed_attempts
+    FROM public.invitation_redemption_attempts
+    WHERE user_id = p_user_id
+      AND attempted_at > (NOW() - INTERVAL '15 minutes')
+      AND success = FALSE;
+
+    IF v_failed_attempts >= 5 THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error', 'Too many failed passcode attempts. For security, please wait 15 minutes before trying again.'
+        );
+    END IF;
+
+    -- 2. Compute sha256 hash of the normalized upper-trimmed passcode
     v_code_hash := encode(digest(TRIM(UPPER(p_code)), 'sha256'), 'hex');
 
-    -- Find the invitation
+    -- 3. Find the invitation
     SELECT * INTO v_invite
     FROM public.invitations
     WHERE invite_code_hash = v_code_hash
     FOR UPDATE;
 
     IF NOT FOUND THEN
+        -- Record failed attempt
+        INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
+        VALUES (p_user_id, NOW(), FALSE);
+
         RETURN jsonb_build_object('success', false, 'error', 'Invalid invitation passcode.');
     END IF;
 
     IF v_invite.status = 'redeemed' THEN
+        INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
+        VALUES (p_user_id, NOW(), FALSE);
+
         RETURN jsonb_build_object('success', false, 'error', 'This invitation passcode has already been redeemed.');
     END IF;
 
     IF v_invite.status = 'revoked' THEN
+        INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
+        VALUES (p_user_id, NOW(), FALSE);
+
         RETURN jsonb_build_object('success', false, 'error', 'This invitation has been revoked by the care circle owner.');
     END IF;
 
     IF v_invite.expires_at < NOW() THEN
         UPDATE public.invitations SET status = 'expired' WHERE id = v_invite.id;
+        INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
+        VALUES (p_user_id, NOW(), FALSE);
+
         RETURN jsonb_build_object('success', false, 'error', 'This invitation passcode has expired.');
     END IF;
 
-    -- Check if user is already an active member
+    -- 4. Check if user is already an active member
     SELECT * INTO v_existing_member
     FROM public.care_members
     WHERE care_profile_id = v_invite.care_profile_id AND user_id = p_user_id;
@@ -59,7 +98,7 @@ BEGIN
     SELECT * INTO v_profile FROM public.profiles WHERE id = p_user_id;
     SELECT * INTO v_care_profile FROM public.care_profiles WHERE id = v_invite.care_profile_id;
 
-    -- Insert or reactivate care member
+    -- 5. Insert or reactivate care member
     IF FOUND THEN
         UPDATE public.care_members
         SET status = 'active',
@@ -90,14 +129,18 @@ BEGIN
         );
     END IF;
 
-    -- Mark invitation as redeemed
+    -- 6. Mark invitation as redeemed (one-time redemption guarantee)
     UPDATE public.invitations
     SET status = 'redeemed',
         redeemed_at = NOW(),
         redeemed_by = p_user_id
     WHERE id = v_invite.id;
 
-    -- Insert into activity logs
+    -- Record successful attempt to reset rate limits
+    INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
+    VALUES (p_user_id, NOW(), TRUE);
+
+    -- 7. Insert into activity logs
     INSERT INTO public.activity_logs (
         care_profile_id,
         actor_id,

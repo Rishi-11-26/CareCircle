@@ -10,7 +10,7 @@ import {
   Notification,
   ActivityLog,
 } from '@/types';
-import { hashPasscode } from '@/lib/crypto';
+import { hashPasscode, maskPasscodeHint } from '@/lib/crypto';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { format, subDays, addDays } from 'date-fns';
 
@@ -724,7 +724,7 @@ class StorageDataService {
     inviteeEmail?: string;
   }): Promise<Invitation> {
     const hash = await hashPasscode(params.passcode);
-    const hint = `${params.passcode.slice(0, 5)}***`;
+    const hint = maskPasscodeHint(params.passcode);
     const expiresAt = addDays(new Date(), 7).toISOString();
 
     const invitation: Invitation = {
@@ -750,7 +750,28 @@ class StorageDataService {
     return invitation;
   }
 
+  private failedAttempts: Record<string, { count: number; lockedUntil: number }> = {};
+
   async redeemInvitation(passcode: string, user: UserProfile): Promise<{ success: boolean; error?: string; careProfileId?: string }> {
+    // 1. Client & Server-side Rate Limiting check: max 5 failed attempts in 15 mins
+    const userAttempts = this.failedAttempts[user.id];
+    if (userAttempts && userAttempts.lockedUntil > Date.now()) {
+      const minsRemaining = Math.ceil((userAttempts.lockedUntil - Date.now()) / (60 * 1000));
+      return {
+        success: false,
+        error: `Too many failed passcode attempts. For security, please wait ${minsRemaining} minute(s) before trying again.`,
+      };
+    }
+
+    const recordFailedAttempt = () => {
+      const current = this.failedAttempts[user.id] || { count: 0, lockedUntil: 0 };
+      current.count += 1;
+      if (current.count >= 5) {
+        current.lockedUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lockout
+      }
+      this.failedAttempts[user.id] = current;
+    };
+
     const hash = await hashPasscode(passcode);
 
     if (isSupabaseConfigured() && supabase) {
@@ -758,26 +779,41 @@ class StorageDataService {
         p_code: passcode,
         p_user_id: user.id,
       });
-      if (error) return { success: false, error: error.message };
+      if (error) {
+        recordFailedAttempt();
+        return { success: false, error: error.message };
+      }
+      if (!data.success) {
+        recordFailedAttempt();
+      } else {
+        delete this.failedAttempts[user.id];
+      }
       return data;
     }
 
     // Local / In-memory validation
     const invite = this.inMemoryCache.invitations.find(i => i.invite_code_hash === hash);
     if (!invite) {
+      recordFailedAttempt();
       return { success: false, error: 'Invalid invitation passcode. Please check spelling.' };
     }
     if (invite.status === 'redeemed') {
+      recordFailedAttempt();
       return { success: false, error: 'This invitation passcode has already been used.' };
     }
     if (invite.status === 'revoked') {
+      recordFailedAttempt();
       return { success: false, error: 'This invitation has been revoked by the care circle.' };
     }
     if (new Date(invite.expires_at) < new Date()) {
       invite.status = 'expired';
+      recordFailedAttempt();
       this.saveAll();
       return { success: false, error: 'This invitation passcode has expired.' };
     }
+
+    // Reset failed attempts upon successful validation
+    delete this.failedAttempts[user.id];
 
     // Check existing membership
     const existing = this.inMemoryCache.careMembers.find(

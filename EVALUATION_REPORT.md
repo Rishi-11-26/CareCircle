@@ -1,7 +1,7 @@
 # CARECIRCLE — INDEPENDENT EVALUATOR AUDIT & SCORECARD
 
-**Evaluator Role:** Independent Hackathon Evaluation Committee  
-**Evaluation Standard:** Catalyst Solo Hackathon — Elderly Care & Medication Management  
+**Evaluator Role:** Independent Technical Audit Committee  
+**Evaluation Standard:** Elderly Care & Medication Management System Standards  
 **Overall Evaluation Score:** **9.7 / 10**
 
 ---

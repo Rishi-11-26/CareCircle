@@ -1,7 +1,6 @@
 # CareCircle — Connected care. Independent living.
 
-> **Catalyst Solo Hackathon**  
-> **Challenge:** Elderly Care & Medication Management Platform  
+> **Platform:** Elderly Care & Medication Management Platform  
 > **Status:** Production-Ready Autonomous Implementation
 
 ---

@@ -60,7 +60,7 @@ export const Navbar: React.FC = () => {
             </span>
           </div>
 
-          {/* Interactive Role Switcher for Hackathon Demonstration */}
+          {/* Multi-Role Care Profile View Switcher */}
           <div className="flex items-center gap-1.5 bg-stone-light p-1 rounded-lg border border-stone">
             <span className="text-xs text-charcoal-muted px-2 font-medium hidden sm:inline">
               Simulate Role:
