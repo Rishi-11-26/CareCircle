@@ -90,6 +90,14 @@ CREATE TABLE IF NOT EXISTS public.invitation_redemption_attempts (
     success BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+-- Atomic per-user rate limit state for concurrent-safe brute-force lockout
+CREATE TABLE IF NOT EXISTS public.invitation_rate_limits (
+    user_id UUID PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TIMESTAMPTZ,
+    last_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Medications Catalog & Prescriptions
 CREATE TABLE IF NOT EXISTS public.medications (
     id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
@@ -337,16 +345,17 @@ BEGIN
     END IF;
 
     IF TG_OP = 'UPDATE' THEN
-        -- If already confirmed (taken or skipped), prohibit altering core medical schedule data
+        -- Confirmed dose events (taken or skipped) cannot be updated at all, ever (including is_corrected or updated_at)
         IF OLD.status IN ('taken', 'skipped') THEN
-            IF NEW.scheduled_date <> OLD.scheduled_date OR
-               NEW.scheduled_time <> OLD.scheduled_time OR
-               NEW.medication_id <> OLD.medication_id OR
-               NEW.care_profile_id <> OLD.care_profile_id OR
-               NEW.dose_identity <> OLD.dose_identity OR
-               NEW.recorded_by <> OLD.recorded_by THEN
-                RAISE EXCEPTION 'Core medical attributes of a confirmed dose record cannot be modified. Record an append-only correction instead.';
-            END IF;
+            RAISE EXCEPTION 'Confirmed dose events are immutable audit records and cannot be modified. Record an append-only correction instead.';
+        END IF;
+
+        IF NEW.scheduled_date <> OLD.scheduled_date OR
+           NEW.scheduled_time <> OLD.scheduled_time OR
+           NEW.medication_id <> OLD.medication_id OR
+           NEW.care_profile_id <> OLD.care_profile_id OR
+           NEW.dose_identity <> OLD.dose_identity THEN
+            RAISE EXCEPTION 'Core schedule identity attributes of a dose record cannot be modified.';
         END IF;
     END IF;
 
@@ -555,7 +564,8 @@ DECLARE
     v_invite RECORD;
     v_profile RECORD;
     v_existing_member RECORD;
-    v_failed_attempts INTEGER;
+    v_rate_limit RECORD;
+    v_new_attempts INTEGER;
 BEGIN
     -- 1. Authentication Check
     v_caller_id := auth.uid();
@@ -570,18 +580,30 @@ BEGIN
     END IF;
     v_caller_email := v_profile.email;
 
-    -- 2. Server-side Rate Limiting: Max 5 failed attempts per 15 minutes
-    SELECT COUNT(*) INTO v_failed_attempts
-    FROM public.invitation_redemption_attempts
-    WHERE user_id = v_caller_id
-      AND attempted_at > (NOW() - INTERVAL '15 minutes')
-      AND success = FALSE;
+    -- 2. Concurrency-Safe Server-side Rate Limiting via Exclusive Row Lock
+    INSERT INTO public.invitation_rate_limits (user_id, failed_attempts, last_attempt_at)
+    VALUES (v_caller_id, 0, NOW())
+    ON CONFLICT (user_id) DO NOTHING;
 
-    IF v_failed_attempts >= 5 THEN
+    SELECT * INTO v_rate_limit
+    FROM public.invitation_rate_limits
+    WHERE user_id = v_caller_id
+    FOR UPDATE;
+
+    -- Check if currently locked out
+    IF v_rate_limit.locked_until IS NOT NULL AND v_rate_limit.locked_until > NOW() THEN
         RETURN jsonb_build_object(
             'success', false,
             'error', 'Too many failed passcode attempts. For security, please wait 15 minutes before trying again.'
         );
+    END IF;
+
+    -- If lockout has elapsed, reset counter
+    IF v_rate_limit.locked_until IS NOT NULL AND v_rate_limit.locked_until <= NOW() THEN
+        UPDATE public.invitation_rate_limits
+        SET failed_attempts = 0, locked_until = NULL, last_attempt_at = NOW()
+        WHERE user_id = v_caller_id;
+        v_rate_limit.failed_attempts := 0;
     END IF;
 
     -- 3. Compute sha256 hash of normalized upper-trimmed passcode
@@ -594,6 +616,13 @@ BEGIN
     FOR UPDATE;
 
     IF NOT FOUND THEN
+        v_new_attempts := v_rate_limit.failed_attempts + 1;
+        UPDATE public.invitation_rate_limits
+        SET failed_attempts = v_new_attempts,
+            locked_until = CASE WHEN v_new_attempts >= 5 THEN NOW() + INTERVAL '15 minutes' ELSE NULL END,
+            last_attempt_at = NOW()
+        WHERE user_id = v_caller_id;
+
         INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
         VALUES (v_caller_id, NOW(), FALSE);
         RETURN jsonb_build_object('success', false, 'error', 'Invalid passcode. Please verify code.');
@@ -601,12 +630,26 @@ BEGIN
 
     -- 5. Status Validations
     IF v_invite.status = 'redeemed' THEN
+        v_new_attempts := v_rate_limit.failed_attempts + 1;
+        UPDATE public.invitation_rate_limits
+        SET failed_attempts = v_new_attempts,
+            locked_until = CASE WHEN v_new_attempts >= 5 THEN NOW() + INTERVAL '15 minutes' ELSE NULL END,
+            last_attempt_at = NOW()
+        WHERE user_id = v_caller_id;
+
         INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
         VALUES (v_caller_id, NOW(), FALSE);
         RETURN jsonb_build_object('success', false, 'error', 'This invitation passcode has already been redeemed.');
     END IF;
 
     IF v_invite.status = 'revoked' THEN
+        v_new_attempts := v_rate_limit.failed_attempts + 1;
+        UPDATE public.invitation_rate_limits
+        SET failed_attempts = v_new_attempts,
+            locked_until = CASE WHEN v_new_attempts >= 5 THEN NOW() + INTERVAL '15 minutes' ELSE NULL END,
+            last_attempt_at = NOW()
+        WHERE user_id = v_caller_id;
+
         INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
         VALUES (v_caller_id, NOW(), FALSE);
         RETURN jsonb_build_object('success', false, 'error', 'This invitation has been revoked by the care circle.');
@@ -614,6 +657,14 @@ BEGIN
 
     IF v_invite.expires_at < NOW() THEN
         UPDATE public.invitations SET status = 'expired' WHERE id = v_invite.id;
+
+        v_new_attempts := v_rate_limit.failed_attempts + 1;
+        UPDATE public.invitation_rate_limits
+        SET failed_attempts = v_new_attempts,
+            locked_until = CASE WHEN v_new_attempts >= 5 THEN NOW() + INTERVAL '15 minutes' ELSE NULL END,
+            last_attempt_at = NOW()
+        WHERE user_id = v_caller_id;
+
         INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
         VALUES (v_caller_id, NOW(), FALSE);
         RETURN jsonb_build_object('success', false, 'error', 'This invitation passcode has expired.');
@@ -622,6 +673,13 @@ BEGIN
     -- 6. Email restriction enforcement (if invitation was scoped to a specific recipient email)
     IF v_invite.invitee_email IS NOT NULL AND TRIM(v_invite.invitee_email) <> '' THEN
         IF LOWER(TRIM(v_invite.invitee_email)) <> LOWER(TRIM(v_caller_email)) THEN
+            v_new_attempts := v_rate_limit.failed_attempts + 1;
+            UPDATE public.invitation_rate_limits
+            SET failed_attempts = v_new_attempts,
+                locked_until = CASE WHEN v_new_attempts >= 5 THEN NOW() + INTERVAL '15 minutes' ELSE NULL END,
+                last_attempt_at = NOW()
+            WHERE user_id = v_caller_id;
+
             INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
             VALUES (v_caller_id, NOW(), FALSE);
             RETURN jsonb_build_object(
@@ -658,10 +716,19 @@ BEGIN
         );
     END IF;
 
-    -- 9. Mark invitation redeemed
+    -- 9. Atomic One-Use Redemption: Update invitation ONLY if still pending
     UPDATE public.invitations
     SET status = 'redeemed', redeemed_at = NOW(), redeemed_by = v_caller_id
-    WHERE id = v_invite.id;
+    WHERE id = v_invite.id AND status = 'pending';
+
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'This invitation passcode has already been redeemed.');
+    END IF;
+
+    -- Reset rate limit counter upon successful redemption
+    UPDATE public.invitation_rate_limits
+    SET failed_attempts = 0, locked_until = NULL, last_attempt_at = NOW()
+    WHERE user_id = v_caller_id;
 
     -- Record success attempt
     INSERT INTO public.invitation_redemption_attempts (user_id, attempted_at, success)
@@ -713,9 +780,11 @@ AS $$
 DECLARE
     v_caller_id UUID;
     v_caller_role TEXT;
+    v_can_manage_meds BOOLEAN := FALSE;
     v_care_profile RECORD;
     v_medication RECORD;
     v_schedule RECORD;
+    v_target_log RECORD;
     v_dose_identity TEXT;
     v_existing_log RECORD;
     v_new_log RECORD;
@@ -730,20 +799,40 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'Unauthenticated: Valid user session required.');
     END IF;
 
-    -- 2. Care Profile Verification: Profile must exist
+    -- 2. Explicit Source Whitelisting & System Impersonation Defense
+    IF p_source = 'system' THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error', 'Unauthorized source: System-originated events cannot be recorded by client sessions.'
+        );
+    END IF;
+
+    IF p_source NOT IN ('self', 'caregiver_administered', 'family_reported') THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error', 'Invalid source: Must be one of: self, caregiver_administered, family_reported.'
+        );
+    END IF;
+
+    -- 3. Care Profile Verification: Profile must exist and have a valid IANA timezone
     SELECT * INTO v_care_profile FROM public.care_profiles WHERE id = p_care_profile_id;
     IF NOT FOUND THEN
         RETURN jsonb_build_object('success', false, 'error', 'Care profile not found.');
     END IF;
 
-    -- 3. Authorization Check: Derive actor role strictly from trusted database membership
-    SELECT role INTO v_caller_role
+    IF v_care_profile.timezone IS NULL OR TRIM(v_care_profile.timezone) = '' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Care profile is missing a configured IANA timezone.');
+    END IF;
+
+    -- 4. Authorization & Permissions Check: Derive caller role and permissions from database
+    SELECT role, can_manage_medications INTO v_caller_role, v_can_manage_meds
     FROM public.care_members
     WHERE care_profile_id = p_care_profile_id AND user_id = v_caller_id AND status = 'active';
 
     IF v_caller_role IS NULL THEN
         IF v_care_profile.owner_id = v_caller_id THEN
             v_caller_role := 'owner';
+            v_can_manage_meds := (v_care_profile.assistance_level <> 'caregiver_managed');
         ELSE
             -- Strictly reject unassociated or revoked callers
             RETURN jsonb_build_object(
@@ -753,7 +842,41 @@ BEGIN
         END IF;
     END IF;
 
-    -- 4. Medication Ownership Check: Medication must belong to this specific care profile
+    -- 5. Role-to-Source Authenticity & Assisted Care Level Enforcement
+    IF p_source = 'self' THEN
+        IF v_caller_role NOT IN ('owner', 'elderly') THEN
+            RETURN jsonb_build_object(
+                'success', false,
+                'error', 'Invalid source: Caregivers or family cannot record self-administration on behalf of the elderly individual.'
+            );
+        END IF;
+        IF v_care_profile.assistance_level = 'caregiver_managed' THEN
+            RETURN jsonb_build_object(
+                'success', false,
+                'error', 'This profile is in Caregiver Managed mode. Medications must be administered and recorded by an authorized caregiver.'
+            );
+        END IF;
+    END IF;
+
+    IF p_source = 'caregiver_administered' THEN
+        IF v_caller_role NOT IN ('caretaker', 'owner') OR NOT v_can_manage_meds THEN
+            RETURN jsonb_build_object(
+                'success', false,
+                'error', 'Invalid source or permission: Only authorized caretakers with medication management permission may record caregiver-administered doses.'
+            );
+        END IF;
+    END IF;
+
+    IF p_source = 'family_reported' THEN
+        IF v_caller_role NOT IN ('family', 'owner') THEN
+            RETURN jsonb_build_object(
+                'success', false,
+                'error', 'Invalid source: Only family circle members may record family-reported doses.'
+            );
+        END IF;
+    END IF;
+
+    -- 6. Medication Ownership Check: Medication must belong to this specific care profile
     SELECT * INTO v_medication
     FROM public.medications
     WHERE id = p_medication_id AND care_profile_id = p_care_profile_id;
@@ -765,7 +888,7 @@ BEGIN
         );
     END IF;
 
-    -- 5. Schedule Consistency Check (if provided)
+    -- 7. Schedule Consistency Check (if schedule is specified)
     IF p_schedule_id IS NOT NULL THEN
         SELECT * INTO v_schedule
         FROM public.medication_schedules
@@ -779,46 +902,15 @@ BEGIN
         END IF;
     END IF;
 
-    -- 6. Status Validation
+    -- 8. Status Validation
     IF p_status NOT IN ('taken', 'skipped') THEN
         RETURN jsonb_build_object('success', false, 'error', 'Invalid status: Must be taken or skipped.');
     END IF;
 
-    -- 7. Assisted Care Level & Source Validation
-    -- In caregiver_managed mode, elderly users/self-confirmation is blocked
-    IF v_care_profile.assistance_level = 'caregiver_managed' AND (p_source = 'self' OR v_caller_role IN ('owner', 'elderly')) THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'This profile is in Caregiver Managed mode. Medications must be administered and recorded by an authorized caregiver.'
-        );
-    END IF;
-
-    -- Role-to-Source authenticity enforcement
-    IF p_source = 'caregiver_administered' AND v_caller_role NOT IN ('caretaker', 'owner') THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'Invalid source: Only authorized caretakers may record caregiver-administered doses.'
-        );
-    END IF;
-
-    IF p_source = 'family_reported' AND v_caller_role NOT IN ('family', 'owner') THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'Invalid source: Only family circle members may record family-reported doses.'
-        );
-    END IF;
-
-    IF p_source = 'self' AND v_caller_role NOT IN ('owner', 'elderly') THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error', 'Invalid source: Caregivers or family cannot record self-administration on behalf of the elderly individual.'
-        );
-    END IF;
-
-    -- 8. Timezone-Aware Confirmation Window Check (Block confirmations >60 minutes early)
+    -- 9. Timezone-Aware Confirmation Window Check (Block confirmations >60 minutes early)
     IF p_status = 'taken' AND NOT p_is_correction THEN
-        -- Convert local date & time in care profile's configured IANA timezone to UTC
-        v_sched_timestamptz := (p_scheduled_date::TEXT || ' ' || p_scheduled_time::TEXT)::TIMESTAMP AT TIME ZONE COALESCE(v_care_profile.timezone, 'America/Los_Angeles');
+        -- Convert local scheduled date & time in care profile's configured IANA timezone to UTC
+        v_sched_timestamptz := (p_scheduled_date::TEXT || ' ' || p_scheduled_time::TEXT)::TIMESTAMP AT TIME ZONE v_care_profile.timezone;
         v_diff_minutes := EXTRACT(EPOCH FROM (v_sched_timestamptz - v_now)) / 60;
         IF v_diff_minutes > 60 THEN
             RETURN jsonb_build_object(
@@ -831,26 +923,62 @@ BEGIN
     v_dose_identity := 'dose_' || p_medication_id::TEXT || '_' || p_scheduled_date::TEXT || '_' || p_scheduled_time::TEXT;
     v_adherence_status := CASE WHEN p_status = 'skipped' THEN 'skipped' ELSE 'on_time' END;
 
-    -- 9. Handle Append-Only Historical Correction
-    IF p_is_correction AND p_correcting_log_id IS NOT NULL THEN
-        -- Verify caller has correction privileges (caretaker or owner)
-        IF v_caller_role NOT IN ('caretaker', 'owner') THEN
+    -- 10. Handle Append-Only Historical Correction
+    IF p_is_correction THEN
+        IF p_correcting_log_id IS NULL THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Missing target dose log ID for correction.');
+        END IF;
+
+        -- Verify caller has correction authority: caretaker with can_manage_medications or owner
+        IF (v_caller_role = 'caretaker' AND NOT v_can_manage_meds) OR v_caller_role NOT IN ('caretaker', 'owner') THEN
             RETURN jsonb_build_object(
                 'success', false,
-                'error', 'Unauthorized: Only authorized caretakers or owners may correct historical dose records.'
+                'error', 'Unauthorized: Only authorized caretakers with medication management authority or owners may correct historical dose records.'
             );
         END IF;
 
-        -- Lock and mark original record as superseded
-        UPDATE public.dose_logs
-        SET is_corrected = TRUE, updated_at = v_now
-        WHERE id = p_correcting_log_id AND care_profile_id = p_care_profile_id;
+        -- Lock target dose log
+        SELECT * INTO v_target_log
+        FROM public.dose_logs
+        WHERE id = p_correcting_log_id
+        FOR UPDATE;
 
         IF NOT FOUND THEN
             RETURN jsonb_build_object('success', false, 'error', 'Target dose log for correction not found.');
         END IF;
 
-        -- Insert new linked correction event
+        -- Validate all relationships: care profile, medication, schedule, and date/time
+        IF v_target_log.care_profile_id <> p_care_profile_id THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Target dose log does not belong to the specified care profile.');
+        END IF;
+
+        IF v_target_log.medication_id <> p_medication_id THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Target dose log does not match the specified medication.');
+        END IF;
+
+        IF p_schedule_id IS NOT NULL AND v_target_log.schedule_id IS NOT NULL AND v_target_log.schedule_id <> p_schedule_id THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Target dose log does not match the specified schedule.');
+        END IF;
+
+        IF v_target_log.scheduled_date <> p_scheduled_date OR v_target_log.scheduled_time <> p_scheduled_time THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Target dose log date and time do not match correction parameters.');
+        END IF;
+
+        IF v_target_log.status NOT IN ('taken', 'skipped') THEN
+            RETURN jsonb_build_object('success', false, 'error', 'Only confirmed dose events (taken or skipped) can be corrected.');
+        END IF;
+
+        -- Prevent duplicate or conflicting corrections
+        IF EXISTS (
+            SELECT 1 FROM public.dose_logs WHERE correction_of_id = v_target_log.id
+        ) THEN
+            RETURN jsonb_build_object(
+                'success', false,
+                'error', 'This dose event has already been corrected and cannot be corrected again.'
+            );
+        END IF;
+
+        -- Insert new immutable correction event (Original confirmed event is NEVER updated or modified)
         INSERT INTO public.dose_logs (
             care_profile_id, medication_id, schedule_id,
             dose_identity, scheduled_date, scheduled_time, scheduled_at, actual_at,
@@ -860,10 +988,10 @@ BEGIN
         ) VALUES (
             p_care_profile_id, p_medication_id, p_schedule_id,
             v_dose_identity || '_corr_' || EXTRACT(EPOCH FROM v_now)::TEXT,
-            p_scheduled_date, p_scheduled_time, v_now, v_now,
+            p_scheduled_date, p_scheduled_time, v_target_log.scheduled_at, v_now,
             p_status, v_adherence_status, p_source,
             v_caller_id, v_caller_role, v_now, v_caller_id,
-            p_correcting_log_id, p_correction_reason, p_notes, p_skip_reason, FALSE, v_now
+            v_target_log.id, p_correction_reason, p_notes, p_skip_reason, FALSE, v_now
         ) RETURNING * INTO v_new_log;
 
         -- Log correction to immutable activity timeline
@@ -880,12 +1008,12 @@ BEGIN
         RETURN jsonb_build_object('success', true, 'already_confirmed', false, 'log', row_to_json(v_new_log));
     END IF;
 
-    -- 10. Normal Dose Confirmation with Idempotency
+    -- 11. Normal Dose Confirmation with Idempotency
     SELECT * INTO v_existing_log
     FROM public.dose_logs
     WHERE care_profile_id = p_care_profile_id
       AND dose_identity = v_dose_identity
-      AND is_corrected = FALSE
+      AND correction_of_id IS NULL
     FOR UPDATE;
 
     IF FOUND THEN
@@ -893,7 +1021,14 @@ BEGIN
             RETURN jsonb_build_object('success', true, 'already_confirmed', true, 'log', row_to_json(v_existing_log));
         END IF;
 
-        -- Update scheduled/due entry to confirmed
+        IF v_existing_log.status IN ('taken', 'skipped') THEN
+            RETURN jsonb_build_object(
+                'success', false,
+                'error', 'Dose is already confirmed as ' || v_existing_log.status || '. Modifications must be submitted as an append-only correction.'
+            );
+        END IF;
+
+        -- If existing entry was preliminary/unconfirmed, record confirmation
         UPDATE public.dose_logs
         SET status = p_status,
             adherence_status = v_adherence_status,
@@ -923,6 +1058,30 @@ BEGIN
             p_skip_reason, p_notes, FALSE, v_now
         ) RETURNING * INTO v_new_log;
     END IF;
+
+    -- 12. Auto-resolve pending unconfirmed escalation notifications
+    UPDATE public.notifications
+    SET status = 'resolved', acknowledged_at = v_now, acknowledged_by = v_caller_id
+    WHERE category = 'unconfirmed_escalation'
+      AND care_profile_id = p_care_profile_id
+      AND metadata->>'dose_identity' = v_dose_identity;
+
+    -- 13. Record Activity Timeline Entry
+    INSERT INTO public.activity_logs (
+        care_profile_id, actor_id, actor_name, actor_role, activity_type, description
+    ) VALUES (
+        p_care_profile_id, v_caller_id,
+        COALESCE((SELECT full_name FROM public.profiles WHERE id = v_caller_id), 'Care Circle Member'),
+        v_caller_role,
+        CASE WHEN p_status = 'taken' THEN 'dose_taken' ELSE 'dose_skipped' END,
+        v_medication.name || ' (' || v_medication.dosage || ') ' ||
+        CASE WHEN p_status = 'taken' THEN 'confirmed taken' ELSE 'marked skipped' END ||
+        ' via ' || p_source || '.'
+    );
+
+    RETURN jsonb_build_object('success', true, 'already_confirmed', false, 'log', row_to_json(v_new_log));
+END;
+$$;
 
     -- 11. Auto-resolve pending unconfirmed escalation notifications
     UPDATE public.notifications
@@ -1029,3 +1188,70 @@ BEGIN
     RETURN jsonb_build_object('success', true);
 END;
 $$;
+
+-- ============================================================================
+-- 8. EFFECTIVE DOSE STATE PROJECTION VIEW
+-- Derives the current effective dose state through an append-only projection
+-- without modifying original confirmed dose records.
+-- ============================================================================
+CREATE OR REPLACE VIEW public.v_effective_dose_logs AS
+WITH ranked_events AS (
+    SELECT
+        d.*,
+        COALESCE(d.correction_of_id, d.id) AS event_chain_root_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(d.correction_of_id, d.id)
+            ORDER BY d.created_at DESC, d.id DESC
+        ) AS rn
+    FROM public.dose_logs d
+)
+SELECT
+    id,
+    care_profile_id,
+    medication_id,
+    schedule_id,
+    dose_identity,
+    scheduled_date,
+    scheduled_time,
+    scheduled_at,
+    actual_at,
+    status,
+    adherence_status,
+    follow_up_status,
+    source,
+    recorded_by,
+    recorded_by_role,
+    confirmed_at,
+    confirmed_by,
+    notes,
+    skip_reason,
+    correction_of_id,
+    correction_reason,
+    (correction_of_id IS NOT NULL) AS is_correction,
+    event_chain_root_id,
+    created_at
+FROM ranked_events
+WHERE rn = 1;
+
+-- Prevent duplicate corrections targeting the same original confirmed event
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dose_logs_single_correction 
+    ON public.dose_logs (correction_of_id) 
+    WHERE (correction_of_id IS NOT NULL);
+
+-- ============================================================================
+-- 9. LEAST-PRIVILEGE FUNCTION PERMISSIONS & GRANTS
+-- Revokes default PUBLIC execution rights from all SECURITY DEFINER functions
+-- and grants access strictly to authenticated users and service_role.
+-- ============================================================================
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.is_care_member(UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.can_manage_medications(UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.can_manage_appointments(UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.can_invite_members(UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.redeem_invitation(TEXT) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.record_dose_event(UUID, UUID, UUID, DATE, TIME, TEXT, TEXT, TEXT, TEXT, BOOLEAN, UUID, TEXT) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.acknowledge_escalation_alert(UUID, TEXT) TO authenticated, service_role;
+
+-- Grant access to effective dose state view
+GRANT SELECT ON public.v_effective_dose_logs TO authenticated, service_role;

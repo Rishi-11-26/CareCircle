@@ -1019,21 +1019,29 @@ class StorageDataService {
 
   // --- Dose Tracking & Confirmation ---
   async getDoseLogs(careProfileId: string): Promise<DoseLog[]> {
+    let logs: DoseLog[] = [];
     if (isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase
         .from('dose_logs')
         .select('*, medication:medications(*)')
         .eq('care_profile_id', careProfileId)
         .order('scheduled_date', { ascending: false });
-      if (!error && data) return data;
+      if (!error && data) logs = data;
+    } else {
+      logs = this.inMemoryCache.doseLogs
+        .filter(d => d.care_profile_id === careProfileId)
+        .map(d => ({
+          ...d,
+          medication: this.inMemoryCache.medications.find(m => m.id === d.medication_id),
+        }));
     }
 
-    return this.inMemoryCache.doseLogs
-      .filter(d => d.care_profile_id === careProfileId)
-      .map(d => ({
-        ...d,
-        medication: this.inMemoryCache.medications.find(m => m.id === d.medication_id),
-      }));
+    // Derive effective is_corrected state dynamically from correction links without mutating original records
+    const correctedTargetIds = new Set(logs.map(l => l.correction_of_id).filter(Boolean));
+    return logs.map(d => ({
+      ...d,
+      is_corrected: Boolean(d.is_corrected || correctedTargetIds.has(d.id)),
+    }));
   }
 
   /**
@@ -1136,10 +1144,7 @@ class StorageDataService {
 
     // Handle Append-Only Correction Workflow
     if (params.isCorrection && params.correctingLogId) {
-      const orig = this.inMemoryCache.doseLogs.find(l => l.id === params.correctingLogId);
-      if (orig) {
-        orig.is_corrected = true;
-      }
+      // Note: In append-only audit mode, the original confirmed event is preserved immutable in memory and DB
       log = {
         id: `dose_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         care_profile_id: params.careProfileId,

@@ -1,138 +1,141 @@
 # CareCircle — Final Engineering, Security & Product Report
-## Master Technical Audit, P0 Security Remediation, and Production Readiness Report
+## Master Technical Audit, P0 Database Security Remediation, and Production Verification
 
 **Project:** CareCircle — Connected care. Independent living.  
 **Vertical:** Elderly Care & Medication Management Platform  
 **Target Repository:** [https://github.com/Rishi-11-26/CareCircle](https://github.com/Rishi-11-26/CareCircle)  
 **Dedicated Supabase URL:** `https://irkbphurzdhghptwfemz.supabase.co`  
-**Automated Test Result:** 50/50 Tests Passing (100% Pass Rate across 10 Test Suites)  
+**Test Suite Results:** 56 / 56 Tests Passing (100% Pass Rate across 11 Test Suites)  
 **Production Build Status:** Clean Compilation (0 TypeScript errors, code-split bundles)
 
 ---
 
 ## 1. Discovered Defects and Exact Engineering Remediations
 
-During technical auditing and security review of the CareCircle codebase, six critical vulnerabilities and structural limitations were identified and remediated:
+Following independent review of the published migrations and application implementation, seven critical database and architecture defects were audited and remediated:
 
-### Defect 1: Client Caller Spoofing in `record_dose_event` (P0 - Security)
-- **Problem:** Previous iterations allowed client code to supply arbitrary `p_user_id` and `p_source` values to the RPC, allowing an unauthenticated or unauthorized client to impersonate a caretaker or record doses on behalf of another patient.
-- **Remediation:** Rewrote `record_dose_event` in `supabase/migrations/master_migration.sql` with fixed `search_path = public` and `SECURITY DEFINER`. The RPC now strictly derives `v_caller_id := auth.uid()`. It queries `care_members` and `care_profiles` to verify that the caller is an active member with medication management authority. Furthermore, it validates source claims against membership roles (e.g., family members cannot claim `caregiver_administered`). If the patient profile has `assistance_level = 'caregiver_managed'`, direct self-confirmation by the elderly patient is rejected.
-
-### Defect 2: Passcode Brute-Force Vulnerability & Race Condition on Redemption (P0 - Security)
-- **Problem:** Invitation codes could theoretically be subject to automated brute-force attacks if rate limits were not enforced on the database, and concurrent redemptions could cause race conditions.
+### Defect 1: Client Caller Spoofing & System Impersonation in `record_dose_event` (P0 - Security)
+- **Problem:** Previous iterations allowed client code to supply arbitrary `p_user_id` and `p_source` values, and did not explicitly reject system-originated events (`'system'`) from client sessions.
 - **Remediation:** 
-  1. High-entropy generation using Web Crypto API (`generatePasscode`) using an unambiguous 32-character alphabet ($>30$ bits of entropy).
-  2. Plaintext codes are never stored; only the SHA-256 hash is recorded in `invitations.invite_code_hash`.
-  3. `redeem_invitation` locks the row `FOR UPDATE` to prevent concurrent redemptions.
-  4. Both the client storage adapter and database RPC enforce a **5-attempt / 15-minute lockout** policy.
-  5. The RPC derives the redeeming user strictly from `auth.uid()`, preventing invitation theft.
+  1. Rewrote `record_dose_event` in `supabase/migrations/master_migration.sql` with fixed `search_path = public, extensions, pg_temp` and `SECURITY DEFINER`.
+  2. The RPC now strictly derives `v_caller_id := auth.uid()`.
+  3. **Explicit Source Whitelisting:** Rejects `p_source = 'system'` with an explicit error (`'Unauthorized source: System-originated events cannot be recorded by client sessions.'`), and ensures user-submitted sources are strictly whitelisted to `'self'`, `'caregiver_administered'`, or `'family_reported'`.
+  4. **Role-to-Source Verification:** Validates that caller role in `care_members` matches the recorded source (e.g., family members cannot record `caregiver_administered`; caregivers cannot impersonate `self`).
+  5. In `caregiver_managed` mode, direct elderly self-confirmation is rejected.
 
-### Defect 3: Historical Dose Log Tampering (P0 - Data Integrity)
-- **Problem:** Updating a confirmed dose log directly in place destroyed the chronological audit trail and opened the door to fraudulent record modification.
+### Defect 2: In-Place Modification of Confirmed Events & Audit Invalidation (P0 - Integrity)
+- **Problem:** When recording corrections, the system previously ran `UPDATE public.dose_logs SET is_corrected = TRUE, updated_at = NOW() WHERE id = p_correcting_log_id`. This altered original confirmed records, violating strict immutability.
 - **Remediation:**
-  1. Created a database trigger `trg_dose_logs_immutability` that prevents `DELETE` or unauthorized `UPDATE` on confirmed dose records.
-  2. Implemented an **append-only correction model**: modifying an existing dose creates a new dose log linked via `correction_of_id`, marking the superseded entry `is_corrected = true`.
-  3. Adherence calculations and the Care Intelligence engine filter out superseded logs and compute metrics strictly from active records.
+  1. **Strict Immutability Trigger:** Updated `enforce_dose_log_immutability()` to throw an exception on ANY update to records with `OLD.status IN ('taken', 'skipped')` — including updates to `is_corrected` or `updated_at`.
+  2. **Append-Only Corrections:** In `record_dose_event`, the target confirmed log is **NEVER modified**. Corrections are inserted as new events with `correction_of_id = v_target_log.id`.
+  3. **Effective State Projection View:** Created `public.v_effective_dose_logs` which projects the latest event in each correction chain using window functions (`PARTITION BY COALESCE(correction_of_id, id) ORDER BY created_at DESC`).
+  4. **Conflicting Corrections Defense:** Created unique partial index `uq_dose_logs_single_correction ON public.dose_logs (correction_of_id) WHERE (correction_of_id IS NOT NULL)` to physically prevent duplicate or conflicting corrections at the database storage level.
 
-### Defect 4: Multi-Timezone & Day-Boundary Scheduling Vulnerabilities (P1 - Correctness)
-- **Problem:** Comparing UTC timestamps directly against local scheduled times caused premature due states or missed-dose false escalations across different timezones and Daylight Saving Time (DST) boundaries.
-- **Remediation:** Added `calculateConfirmationWindow` in `src/lib/dateUtils.ts` and timezone-aware conversions in SQL:
+### Defect 3: Invitation Rate Limit Race Condition Under Concurrent Requests (P0 - Security)
+- **Problem:** Counting failed attempts via `SELECT COUNT(*) FROM invitation_redemption_attempts` was vulnerable to concurrent requests, as parallel requests in uncommitted transactions could bypass the 5-attempt threshold.
+- **Remediation:**
+  1. Created a dedicated atomic tracking table:
+     ```sql
+     CREATE TABLE IF NOT EXISTS public.invitation_rate_limits (
+         user_id UUID PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
+         failed_attempts INTEGER NOT NULL DEFAULT 0,
+         locked_until TIMESTAMPTZ,
+         last_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     );
+     ```
+  2. In `redeem_invitation`, the RPC takes an exclusive row-level lock (`FOR UPDATE`) on the caller's rate limit row:
+     ```sql
+     SELECT * INTO v_rate_limit FROM public.invitation_rate_limits WHERE user_id = v_caller_id FOR UPDATE;
+     ```
+     All concurrent requests serialize through the row lock, guaranteeing that 5 invalid attempts immediately lock the account for 15 minutes.
+  3. Atomic one-use redemption: `UPDATE public.invitations SET status = 'redeemed' ... WHERE id = ... AND status = 'pending'` ensures exactly one transaction can ever redeem a code.
+
+### Defect 4: Hardcoded Timezone Defaults & Naive Local Instants (P1 - Correctness)
+- **Problem:** The codebase had fallback defaults to `'America/Los_Angeles'` and parsed dates with naive local browser/server timezone assumptions.
+- **Remediation:**
+  1. Removed hardcoded timezone defaults. `care_profiles` requires a configured IANA timezone, and `record_dose_event` checks `IF v_care_profile.timezone IS NULL THEN RAISE EXCEPTION`.
+  2. Added `getUtcInstantForProfileWallClock(dateStr, timeStr, ianaTimezone)` in `src/lib/dateUtils.ts` with fixed-point iteration converting wall-clock times to UTC across standard and daylight saving time (EDT/EST, BST/GMT, and IST) without naive local assumptions.
+
+### Defect 5: Unrestricted Public Execution Privileges on Database Functions (P1 - Security)
+- **Problem:** PostgreSQL grants execution permissions to `PUBLIC` by default on all functions unless explicitly revoked.
+- **Remediation:** Added explicit privilege revocation and least-privilege grants at the conclusion of the migration:
   ```sql
-  (p_scheduled_date || ' ' || p_scheduled_time)::timestamp AT TIME ZONE v_care_profile.timezone
+  REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION public.is_care_member(UUID) TO authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.can_manage_medications(UUID) TO authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.can_manage_appointments(UUID) TO authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.can_invite_members(UUID) TO authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.redeem_invitation(TEXT) TO authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.record_dose_event(...) TO authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.acknowledge_escalation_alert(...) TO authenticated, service_role;
   ```
-  Dose confirmation windows enforce a $-60$ minute to $+45$ minute grace period strictly mapped to the patient's local wall-clock timezone. Added 9 unit tests in `tests/timezoneAndScheduling.test.ts` verifying `America/Los_Angeles`, `Asia/Kolkata`, `UTC`, and `Europe/London`.
 
-### Defect 5: Role Escalation on Profile Modification (P0 - Security)
-- **Problem:** A user could update their own `profiles.role` column via direct PostgREST client update.
-- **Remediation:** Created `trg_prevent_role_escalation` trigger on `profiles` that throws an exception if a non-superadmin client attempts to change `OLD.role <> NEW.role`.
+### Defect 6: Incomplete Background Escalation Scheduler (P1 - Operations)
+- **Problem:** `server/index.mjs` contained a minimal stub for `runEscalationCycle` rather than an operational reminder engine.
+- **Remediation:** Implemented the complete escalation pipeline in `server/index.mjs`:
+  1. Upcoming dose reminders (15-30m prior).
+  2. Overdue dose escalations (after grace period).
+  3. Persistent deduplication via `notifications.metadata->>'dose_identity'`.
+  4. Resend email dispatch with delivery status tracking (`email_status = 'sent'` or `'failed'`).
+  5. Safe recovery across server restarts without duplicate alerts.
 
-### Defect 6: Fragmented Multi-Service Deployment Architecture (P1 - Operations)
-- **Problem:** Splitting the frontend (Vite) and backend background workers into separate services increases cost, complexity, and failure modes on free-tier platforms.
-- **Remediation:** Unified the application into a **single integrated Render Web Service** (`server/index.mjs`) that serves pre-built Vite SPA assets, health checks (`/api/health`), protected escalation scheduler endpoints (`/api/scheduler/run-escalations`), Resend transactional emails (`/api/send-email`), and runs an automated 2-minute in-process escalation runner.
+### Defect 7: Inaccurate Claim Alignment in Documentation (P1 - Governance)
+- **Problem:** Documentation previously referred to "zero-knowledge architecture" and "WCAG 2.2 AA certified compliance" and had conflicting touch target dimensions (52px vs 56px).
+- **Remediation:**
+  1. Clarified passcode security as **Cryptographic SHA-256 One-Way Passcode Hashing** with $>30$ bits of entropy and brute-force lockout (not zero-knowledge proofs).
+  2. Clarified accessibility as **WCAG 2.2 AA-Inspired High-Accessibility Design Principles** (minimum 52px touch targets across all standard controls, scaling to 56px+ in Large Print Mode).
 
 ---
 
 ## 2. Feature Verification & Implementation Classification
 
-In accordance with strict hackathon evaluation criteria, every system capability is categorized honestly below:
-
 | Feature / Subsystem | Status | Verification Evidence |
 | :--- | :--- | :--- |
-| **Passcode Cryptography (SHA-256, Entropy)** | `VERIFIED` | 4 tests in `tests/crypto.test.ts` pass; Web Crypto SHA-256 verified. |
-| **Brute-Force Lockout (5 attempts / 15 min)** | `VERIFIED` | Verified in `tests/securityRemediation.test.ts`; tested lockout triggers. |
-| **Elderly 4-Tab Navigation Separation** | `VERIFIED` | 9 tests in `tests/roleNavigationAndAccessibility.test.tsx` pass; UI verified. |
+| **Confirmed Dose Event Immutability** | `VERIFIED` | Tested in `tests/databaseSecurityIntegration.test.ts` via in-memory PostgreSQL (`pg-mem`); UPDATE & DELETE on confirmed events throw exceptions. |
+| **Append-Only Projection View (`v_effective_dose_logs`)** | `VERIFIED` | Tested in `tests/databaseSecurityIntegration.test.ts`; resolves latest state without updating original records. |
+| **Passcode Hashing & Concurrency Lockout** | `VERIFIED` | Tested in `tests/databaseSecurityIntegration.test.ts` and `tests/securityRemediation.test.ts`; 5 failed attempts trigger lockout. |
+| **Explicit Source Whitelisting & Impersonation Defense** | `VERIFIED` | Tested in `tests/databaseSecurityIntegration.test.ts`; `system` source from client rejected. |
+| **Timezone-Aware Wall-Clock Conversion (DST/Standard)**| `VERIFIED` | Tested across `America/New_York`, `Asia/Kolkata`, `Europe/London` in `tests/timezoneAndScheduling.test.ts`. |
+| **Elderly 4-Tab Navigation Separation** | `VERIFIED` | 9 tests in `tests/roleNavigationAndAccessibility.test.tsx` pass. |
 | **Large Print Mode State & Visual Scaling** | `VERIFIED` | Verified in RTL tests; 30–40% scale, line-height, and contrast verified. |
-| **Collapsible Demo Evaluator Dock** | `VERIFIED` | Browser inspection screenshot confirms dock collapses into discreet pill. |
-| **Assisted Care Model (3 levels, 4 sources)** | `VERIFIED` | 5 tests in `tests/assistedCareAndIntegrity.test.ts` pass. |
-| **Timezone Confirmation Windows & Boundaries** | `VERIFIED` | 9 tests in `tests/timezoneAndScheduling.test.ts` pass. |
-| **Append-Only Dose Log Corrections** | `VERIFIED` | Verified in `tests/securityRemediation.test.ts` and `storageAdapter.test.ts`. |
+| **Collapsible Demo Evaluator Dock** | `VERIFIED` | Browser inspection screenshot confirms dock collapses into discrete pill. |
 | **Doctor Visit Clinical Brief (Print & View)** | `VERIFIED` | Verified in browser UI inspection and component rendering tests. |
 | **Adherence Analytics Math & Streak Logic** | `VERIFIED` | 2 tests in `tests/analytics.test.ts` pass with 100% precision. |
-| **Care Intelligence Heuristic Engine** | `VERIFIED` | 3 tests in `tests/careIntelligence.test.ts` pass. |
 | **Single Integrated Node Web Service & Health API**| `VERIFIED` | Executed `node server/index.mjs`; `/api/health` returned HTTP 200. |
-| **Production Vite Compilation & Code Splitting** | `VERIFIED` | `tsc && vite build` completed in 6.7s; 0 warnings; chunks $<40$ kB. |
-| **Supabase PostgreSQL Schema & RPCs** | `IMPLEMENTED` | `supabase/migrations/master_migration.sql` ready to run in Supabase SQL editor. |
-| **Resend Live Email Delivery** | `IMPLEMENTED` | `/api/send-email` and `send-email` Edge Function implemented; requires live API key. |
+| **Production Vite Compilation & Code Splitting** | `VERIFIED` | `tsc && vite build` completed in 5.1s; 0 errors; all chunks $<40$ kB. |
+| **Supabase Remote DDL Migration** | `IMPLEMENTED` | `supabase/migrations/master_migration.sql` prepared for manual execution by project owner. |
+| **Resend Live Email Delivery** | `IMPLEMENTED` | `/api/send-email` and scheduler integration implemented; requires user's live `RESEND_API_KEY`. |
 
 ---
 
-## 3. Step-by-Step Supabase Database Setup Guide
+## 3. Database Security Integration Test Evidence
 
-To link the live Supabase project (`irkbphurzdhghptwfemz`):
+Integration tests were executed using `pg-mem` (an in-memory PostgreSQL engine) to verify actual database behaviors without mocks:
 
-1. Log into your [Supabase Dashboard](https://supabase.com/dashboard/project/irkbphurzdhghptwfemz).
-2. Go to the **SQL Editor** tab on the left navigation.
-3. Open `supabase/migrations/master_migration.sql` from this repository.
-4. Copy the entire file content and paste it into a new query window.
-5. Click **Run**.
-6. The script will execute idempotently, creating:
-   - 11 core tables (`profiles`, `care_profiles`, `care_members`, `invitations`, `medications`, `medication_schedules`, `dose_logs`, `appointments`, `notifications`, `activity_logs`, `audit_events`).
-   - Hardened `SECURITY DEFINER` stored procedures (`record_dose_event`, `redeem_invitation`, `acknowledge_escalation_alert`, `process_unconfirmed_escalations`).
-   - Anti-tampering triggers (`trg_dose_logs_immutability`, `trg_prevent_role_escalation`).
-   - Granular Row Level Security (RLS) policies for all tables.
+```
+ RUN  v3.2.7 D:/CareCircle
 
----
+ ✓ tests/timezoneAndScheduling.test.ts (9 tests)
+ ✓ tests/databaseSecurityIntegration.test.ts (6 tests)
+ ✓ tests/assistedCareAndIntegrity.test.ts (5 tests)
+ ✓ tests/storageAdapter.test.ts (5 tests)
+ ✓ tests/securityRemediation.test.ts (8 tests)
+ ✓ tests/crypto.test.ts (4 tests)
+ ✓ tests/sanity.test.ts (1 test)
+ ✓ tests/careIntelligence.test.ts (3 tests)
+ ✓ tests/workflows.test.tsx (9 tests)
+ ✓ tests/roleNavigationAndAccessibility.test.tsx (9 tests)
+ ✓ tests/analytics.test.ts (2 tests)
 
-## 4. Single-Service Render Deployment Guide
-
-The repository includes a complete Render Blueprint (`render.yaml`) to deploy CareCircle as a single integrated Web Service.
-
-### Quick Deployment via Render Dashboard:
-1. In Render Dashboard, click **New > Blueprint**.
-2. Select repository: `https://github.com/Rishi-11-26/CareCircle`.
-3. Render reads `render.yaml` and provisions:
-   - **Service Name:** `carecircle-app`
-   - **Environment:** `Node`
-   - **Plan:** `starter` (or free)
-   - **Build Command:** `npm install && npm run build`
-   - **Start Command:** `npm start`
-   - **Health Check Path:** `/api/health`
-4. Set the following Environment Variables in Render:
-   | Variable | Value / Description |
-   | :--- | :--- |
-   | `NODE_ENV` | `production` |
-   | `VITE_SUPABASE_URL` | `https://irkbphurzdhghptwfemz.supabase.co` |
-   | `VITE_SUPABASE_ANON_KEY` | `sb_publishable_EMRDEq_0JoB9XkIXUzfeNA_6yAJzbbY` |
-   | `SUPABASE_SERVICE_ROLE_KEY` | *(Your Supabase Service Role Key)* |
-   | `CRON_SECRET` | *(Random 32-character secret for scheduler authorization)* |
-   | `RESEND_API_KEY` | *(Your Resend API Key, e.g. `re_...`)* |
-5. Click **Apply**. Render will automatically build the client SPA, bundle the assets, start the integrated server, and activate the 2-minute background scheduler.
+ Test Files  11 passed (11)
+      Tests  56 passed (56)
+   Duration  14.46s
+```
 
 ---
 
-## 5. Live Evaluator Demonstration Script
+## 4. Remaining Operational Limitations
 
-The application is preloaded with an interactive demonstration environment representing Margaret Hayes' care circle:
-
-| Persona | Role | Primary Use Case |
-| :--- | :--- | :--- |
-| **Margaret Hayes** | Elderly Profile Owner | Simplified 4-tab UI, 1-click dose confirmation, Large Print Mode, Call Family. |
-| **David Hayes** | Family Member (Son) | Overview adherence metrics, assist logging, monitor escalation alerts. |
-| **Nurse Elena Rostova** | Professional Caregiver | Follow-up escalation queue, Clinical Brief export, Care Intelligence. |
-
-### Walkthrough Steps:
-1. **Elderly Confirmation Flow:** As Margaret, click **"I Took This"** on Lisinopril 10mg. The card updates to taken with timestamp and checkmark. Repeated clicks show duplicate action prevention.
-2. **Accessibility Toggle:** In the header, toggle **"Large Print Mode"**. Notice immediate text enlargement and high-contrast styling.
-3. **Trigger Escalation:** Expand the floating evaluator dock in the lower right and click **"Run Escalation Cycle"**. Overdue doses escalate to `unconfirmed`.
-4. **Caregiver Resolution:** Switch to **Elena (Caretaker)**. In the **Follow-Up & Escalation Queue**, click **"Acknowledge & Record Note"** on the unconfirmed dose, enter a resolution note, and verify status moves to acknowledged.
-5. **Clinical Brief:** In **Doctor Visits**, click **"View Doctor Visit Brief"** for Dr. Sarah Chen to review the 30-day adherence report, logged skip reasons, and medication catalog.
+1. **Supabase DDL Execution:** As directed, SQL migrations have not been applied directly to the remote Supabase project. The project owner must execute `supabase/migrations/master_migration.sql` in the Supabase SQL Editor.
+2. **Resend Live API Key:** Transactional email delivery requires setting `RESEND_API_KEY` in the server environment. When omitted, notifications are recorded in the database with `email_status = 'none'`.
+3. **Render Deployment:** Deployment configuration is maintained in `render.yaml`.

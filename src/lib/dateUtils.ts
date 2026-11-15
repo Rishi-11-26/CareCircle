@@ -6,6 +6,51 @@
 export const DEFAULT_PROFILE_TIMEZONE = 'America/Los_Angeles';
 
 /**
+ * Accurately converts a local wall-clock date and time in an arbitrary IANA timezone
+ * to the exact UTC Date instant without naive local-browser or server-local assumptions.
+ * Correctly accounts for Daylight Saving Time (DST) jumps and non-hourly offsets.
+ */
+export function getUtcInstantForProfileWallClock(
+  dateStr: string, // YYYY-MM-DD
+  timeStr: string, // HH:MM
+  ianaTimezone: string
+): Date {
+  if (!ianaTimezone || !ianaTimezone.trim()) {
+    throw new Error('IANA timezone must be explicitly provided.');
+  }
+
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const [hour, minute] = timeStr.split(':').map(Number);
+
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: ianaTimezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+
+  function getOffsetMs(targetDate: Date): number {
+    const parts = formatter.formatToParts(targetDate);
+    const m: Record<string, number> = {};
+    for (const p of parts) {
+      if (p.type !== 'literal') m[p.type] = Number(p.value);
+    }
+    const wallUtc = Date.UTC(m.year, m.month - 1, m.day, m.hour, m.minute, m.second || 0);
+    return targetDate.getTime() - wallUtc;
+  }
+
+  let instant = new Date(utcGuess.getTime() + getOffsetMs(utcGuess));
+  instant = new Date(utcGuess.getTime() + getOffsetMs(instant));
+  return instant;
+}
+
+/**
  * Format a date/timestamp in the specific profile's IANA timezone.
  */
 export function formatTimeInTimezone(
