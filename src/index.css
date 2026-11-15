@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-forest: #25483D;
+    --color-sage: #A5B59A;
+    --color-terracotta: #C9795B;
+    --color-ivory: #F7F5EF;
+    --color-stone: #E7E4DA;
+    --color-cream: #EFEBE0;
+    --color-charcoal: #292D29;
+  }
+
+  body {
+    background-color: var(--color-ivory);
+    color: var(--color-charcoal);
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    line-height: 1.6;
+    letter-spacing: -0.01em;
+  }
+
+  h1, h2, h3, .font-serif {
+    font-family: 'DM Serif Display', Georgia, serif;
+    letter-spacing: -0.02em;
+  }
+
+  /* Accessible focus indicators */
+  :focus-visible {
+    outline: 2px solid #25483D;
+    outline-offset: 2px;
+  }
+
+  button, input, select, textarea {
+    font-family: inherit;
+  }
+}
+
+/* High-contrast and large-touch accessibility helpers */
+.touch-target-elderly {
+  min-height: 52px;
+  min-width: 52px;
+}
+
+/* Subtle editorial borders */
+.border-editorial {
+  border: 1px solid #E7E4DA;
+}
+
+.border-editorial-subtle {
+  border: 1px solid rgba(231, 228, 218, 0.7);
+}
