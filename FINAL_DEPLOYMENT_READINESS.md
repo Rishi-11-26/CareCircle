@@ -12,8 +12,8 @@
 ## 1. Latest GitHub Verification
 
 - **Branch:** `main`
-- **Latest Commit Hash:** `ed6af1ccf1aa4ca315ea29e27cd0a32e66ee1df1`
-- **Direct Commit URL:** [https://github.com/Rishi-11-26/CareCircle/commit/ed6af1ccf1aa4ca315ea29e27cd0a32e66ee1df1](https://github.com/Rishi-11-26/CareCircle/commit/ed6af1ccf1aa4ca315ea29e27cd0a32e66ee1df1)
+- **Latest Commit Hash:** Main branch head
+- **Direct Commit URL:** [https://github.com/Rishi-11-26/CareCircle/commits/main](https://github.com/Rishi-11-26/CareCircle/commits/main)
 - **Working Tree State:** Clean; all recent security remediations committed and pushed to `origin/main`.
 - **Secret Scan:** Verified clean. Zero live JWTs, service role keys, or Resend credentials exist in tracked files or commit history (`.env` is gitignored; only `.env.example` template is tracked).
 - **Documentation Alignment:** `README.md` and `FINAL_ENGINEERING_REPORT.md` reflect actual code implementation and 65 passing tests across 12 suites.
