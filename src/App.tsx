@@ -4,6 +4,7 @@ import { CareProvider } from '@/contexts/CareContext';
 import { AccessibilityProvider } from '@/contexts/AccessibilityContext';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { RoleRouteGuard } from '@/components/auth/RoleRouteGuard';
+import { AuthRouteGuard } from '@/components/auth/AuthRouteGuard';
 
 // Lazy-loaded route views for code splitting
 const DashboardPage = lazy(() => import('@/pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
@@ -16,6 +17,12 @@ const TimelinePage = lazy(() => import('@/pages/TimelinePage').then(m => ({ defa
 const NotificationsPage = lazy(() => import('@/pages/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
+
+// Lazy-loaded Authentication routes
+const LoginPage = lazy(() => import('@/pages/LoginPage').then(m => ({ default: m.LoginPage })));
+const SignupPage = lazy(() => import('@/pages/SignupPage').then(m => ({ default: m.SignupPage })));
+const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage').then(m => ({ default: m.ForgotPasswordPage })));
+const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage').then(m => ({ default: m.ResetPasswordPage })));
 
 const PageLoadingFallback: React.FC = () => (
   <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3">
@@ -34,19 +41,48 @@ export const App: React.FC = () => {
           <AppLayout>
             <Suspense fallback={<PageLoadingFallback />}>
               <Routes>
-                {/* Public / Common Routes */}
-                <Route path="/" element={<DashboardPage />} />
+                {/* Public Authentication & Marketing Routes */}
                 <Route path="/landing" element={<LandingPage />} />
-                <Route path="/medications" element={<MedicationsPage />} />
-                <Route path="/appointments" element={<AppointmentsPage />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/signup" element={<SignupPage />} />
+                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="/reset-password" element={<ResetPasswordPage />} />
+
+                {/* Protected Clinical Routes */}
+                <Route
+                  path="/"
+                  element={
+                    <AuthRouteGuard>
+                      <DashboardPage />
+                    </AuthRouteGuard>
+                  }
+                />
+                <Route
+                  path="/medications"
+                  element={
+                    <AuthRouteGuard>
+                      <MedicationsPage />
+                    </AuthRouteGuard>
+                  }
+                />
+                <Route
+                  path="/appointments"
+                  element={
+                    <AuthRouteGuard>
+                      <AppointmentsPage />
+                    </AuthRouteGuard>
+                  }
+                />
 
                 {/* Family-Only Administrative Routes */}
                 <Route
                   path="/care-circle"
                   element={
-                    <RoleRouteGuard allowedRoles={['family']}>
-                      <CareCirclePage />
-                    </RoleRouteGuard>
+                    <AuthRouteGuard>
+                      <RoleRouteGuard allowedRoles={['family']}>
+                        <CareCirclePage />
+                      </RoleRouteGuard>
+                    </AuthRouteGuard>
                   }
                 />
 
@@ -54,41 +90,51 @@ export const App: React.FC = () => {
                 <Route
                   path="/intelligence"
                   element={
-                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
-                      <CareIntelligencePage />
-                    </RoleRouteGuard>
+                    <AuthRouteGuard>
+                      <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                        <CareIntelligencePage />
+                      </RoleRouteGuard>
+                    </AuthRouteGuard>
                   }
                 />
                 <Route
                   path="/timeline"
                   element={
-                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
-                      <TimelinePage />
-                    </RoleRouteGuard>
+                    <AuthRouteGuard>
+                      <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                        <TimelinePage />
+                      </RoleRouteGuard>
+                    </AuthRouteGuard>
                   }
                 />
                 <Route
                   path="/notifications"
                   element={
-                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
-                      <NotificationsPage />
-                    </RoleRouteGuard>
+                    <AuthRouteGuard>
+                      <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                        <NotificationsPage />
+                      </RoleRouteGuard>
+                    </AuthRouteGuard>
                   }
                 />
                 <Route
                   path="/analytics"
                   element={
-                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
-                      <AnalyticsPage />
-                    </RoleRouteGuard>
+                    <AuthRouteGuard>
+                      <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                        <AnalyticsPage />
+                      </RoleRouteGuard>
+                    </AuthRouteGuard>
                   }
                 />
                 <Route
                   path="/settings"
                   element={
-                    <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
-                      <SettingsPage />
-                    </RoleRouteGuard>
+                    <AuthRouteGuard>
+                      <RoleRouteGuard allowedRoles={['family', 'caretaker']}>
+                        <SettingsPage />
+                      </RoleRouteGuard>
+                    </AuthRouteGuard>
                   }
                 />
 

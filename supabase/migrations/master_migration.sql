@@ -417,6 +417,57 @@ CREATE TRIGGER trg_prevent_role_escalation
     BEFORE UPDATE ON public.profiles
     FOR EACH ROW EXECUTE FUNCTION public.prevent_profile_role_self_escalation();
 
+-- Trigger Function: Auto-provision public.profiles on auth.users signup
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    INSERT INTO public.profiles (id, email, full_name, role, timezone)
+    VALUES (
+        NEW.id,
+        COALESCE(NEW.email, ''),
+        COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email, 'CareCircle User'),
+        COALESCE(NEW.raw_user_meta_data->>'role', 'family'),
+        COALESCE(NEW.raw_user_meta_data->>'timezone', 'UTC')
+    )
+    ON CONFLICT (id) DO NOTHING;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- Trigger Function: Auto-provision owner membership in care_members
+CREATE OR REPLACE FUNCTION public.handle_new_care_profile()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    INSERT INTO public.care_members (
+        care_profile_id, user_id, role,
+        can_manage_medications, can_manage_appointments,
+        can_invite_members, can_acknowledge_alerts, receive_email_alerts, status
+    ) VALUES (
+        NEW.id, NEW.owner_id, 'owner',
+        TRUE, TRUE, TRUE, TRUE, TRUE, 'active'
+    ) ON CONFLICT (care_profile_id, user_id) DO NOTHING;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_care_profile_created ON public.care_profiles;
+CREATE TRIGGER on_care_profile_created
+    AFTER INSERT ON public.care_profiles
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_care_profile();
+
 -- ============================================================================
 -- 6. ROW LEVEL SECURITY (RLS) POLICIES — IDEMPOTENT & LEAST-PRIVILEGE
 -- ============================================================================
@@ -438,6 +489,11 @@ CREATE POLICY "Users can read own profile"
     ON public.profiles FOR SELECT
     USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
+CREATE POLICY "Users can insert own profile"
+    ON public.profiles FOR INSERT
+    WITH CHECK (auth.uid() = id);
+
 DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 CREATE POLICY "Users can update own profile"
     ON public.profiles FOR UPDATE
@@ -448,6 +504,11 @@ DROP POLICY IF EXISTS "Circle members can view care profile" ON public.care_prof
 CREATE POLICY "Circle members can view care profile"
     ON public.care_profiles FOR SELECT
     USING (public.is_care_member(id));
+
+DROP POLICY IF EXISTS "Users can insert own care profile" ON public.care_profiles;
+CREATE POLICY "Users can insert own care profile"
+    ON public.care_profiles FOR INSERT
+    WITH CHECK (owner_id = auth.uid());
 
 DROP POLICY IF EXISTS "Owners can update care profile" ON public.care_profiles;
 CREATE POLICY "Owners can update care profile"

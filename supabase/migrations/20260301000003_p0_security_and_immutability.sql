@@ -641,3 +641,65 @@ GRANT EXECUTE ON FUNCTION public.redeem_invitation(TEXT) TO authenticated, servi
 GRANT EXECUTE ON FUNCTION public.record_dose_event(UUID, UUID, UUID, DATE, TIME, TEXT, TEXT, TEXT, TEXT, BOOLEAN, UUID, TEXT) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.acknowledge_escalation_alert(UUID, TEXT) TO authenticated, service_role;
 GRANT SELECT ON public.v_effective_dose_logs TO authenticated, service_role;
+
+-- 9. Profile & Care Profile Insertion Policies for Authenticated Users
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
+CREATE POLICY "Users can insert own profile"
+    ON public.profiles FOR INSERT
+    WITH CHECK (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Users can insert own care profile" ON public.care_profiles;
+CREATE POLICY "Users can insert own care profile"
+    ON public.care_profiles FOR INSERT
+    WITH CHECK (owner_id = auth.uid());
+
+-- 10. Auto-provision profile on auth.users signup
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    INSERT INTO public.profiles (id, email, full_name, role, timezone)
+    VALUES (
+        NEW.id,
+        COALESCE(NEW.email, ''),
+        COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email, 'CareCircle User'),
+        COALESCE(NEW.raw_user_meta_data->>'role', 'family'),
+        COALESCE(NEW.raw_user_meta_data->>'timezone', 'UTC')
+    )
+    ON CONFLICT (id) DO NOTHING;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- 11. Auto-provision owner membership when care profile is created
+CREATE OR REPLACE FUNCTION public.handle_new_care_profile()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    INSERT INTO public.care_members (
+        care_profile_id, user_id, role,
+        can_manage_medications, can_manage_appointments,
+        can_invite_members, can_acknowledge_alerts, receive_email_alerts, status
+    ) VALUES (
+        NEW.id, NEW.owner_id, 'owner',
+        TRUE, TRUE, TRUE, TRUE, TRUE, 'active'
+    ) ON CONFLICT (care_profile_id, user_id) DO NOTHING;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_care_profile_created ON public.care_profiles;
+CREATE TRIGGER on_care_profile_created
+    AFTER INSERT ON public.care_profiles
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_care_profile();

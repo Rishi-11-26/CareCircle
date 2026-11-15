@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useCare } from '@/contexts/CareContext';
 import { useAccessibility } from '@/contexts/AccessibilityContext';
 import { CallFamilyModal } from '@/components/common/CallFamilyModal';
+import { CareCircleSwitcher } from '@/components/care-circle/CareCircleSwitcher';
 import {
   Heart,
   Pill,
@@ -18,10 +19,12 @@ import {
   Phone,
   ZoomIn,
   ZoomOut,
+  LogOut,
+  Sparkles,
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
-  const { currentUser, unreadAlertsCount, intelligenceReport, careProfile } = useCare();
+  const { currentUser, unreadAlertsCount, intelligenceReport, careProfile, signOut, isAuthenticated, isDemoMode } = useCare();
   const { largePrintMode, toggleLargePrintMode } = useAccessibility();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [callFamilyModalOpen, setCallFamilyModalOpen] = useState(false);
@@ -110,6 +113,18 @@ export const Navbar: React.FC = () => {
               <span>Call Family</span>
             </a>
 
+            {isAuthenticated && (
+              <button
+                onClick={() => signOut()}
+                className="hidden sm:inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-stone bg-white hover:bg-stone text-xs font-bold text-charcoal-muted hover:text-terracotta transition-all cursor-pointer min-h-[48px] touch-target-elderly"
+                title="Sign Out"
+                aria-label="Sign Out"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Sign Out</span>
+              </button>
+            )}
+
             {/* Mobile hamburger */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -191,6 +206,19 @@ export const Navbar: React.FC = () => {
               <Phone className="w-6 h-6" />
               <span>Call Family</span>
             </a>
+            {isAuthenticated && (
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  signOut();
+                }}
+                className="w-full flex items-center gap-3 px-5 py-4 rounded-2xl text-lg font-bold min-h-[60px] touch-target-elderly bg-white border border-stone text-charcoal-muted hover:text-terracotta text-left cursor-pointer"
+                aria-label="Sign Out"
+              >
+                <LogOut className="w-6 h-6" />
+                <span>Sign Out</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -243,19 +271,20 @@ export const Navbar: React.FC = () => {
       {/* Top utility row: Profile context & Large Print Mode toggle */}
       <div className="border-b border-stone/60 bg-cream-light/60 px-4 py-2">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-sm">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-charcoal-muted">
-              Care Profile:
-            </span>
-            <span className="font-serif text-forest text-base font-medium">
-              {careProfile?.full_name || 'Margaret Hayes'}
-            </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <CareCircleSwitcher />
             <span className="text-xs px-2 py-0.5 rounded-full bg-stone text-charcoal-muted font-medium">
               Passcode Protected
             </span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-forest/10 text-forest font-bold">
-              {isCaretaker ? 'Nurse Elena (Caregiver)' : 'David Hayes (Family Member)'}
+              {currentUser?.full_name || 'User'} ({currentUser?.role || 'member'})
             </span>
+            {isDemoMode && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-terracotta/10 text-terracotta font-extrabold uppercase tracking-wider flex items-center gap-1 border border-terracotta/20">
+                <Sparkles className="w-3 h-3" />
+                <span>Demo Persona Mode</span>
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -271,6 +300,17 @@ export const Navbar: React.FC = () => {
             >
               {largePrintMode ? 'Standard Text Mode' : '🔍 Large Print Mode'}
             </button>
+
+            {isAuthenticated && (
+              <button
+                onClick={() => signOut()}
+                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md font-medium text-charcoal-muted hover:text-terracotta hover:bg-white border border-transparent hover:border-stone transition-all cursor-pointer"
+                title="Sign Out"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -391,6 +431,18 @@ export const Navbar: React.FC = () => {
             <Shield className="w-5 h-5" />
             <span>Settings & Access Control</span>
           </Link>
+          {isAuthenticated && (
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                signOut();
+              }}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium text-charcoal-muted hover:text-terracotta hover:bg-stone/60 touch-target-elderly cursor-pointer"
+            >
+              <LogOut className="w-5 h-5" />
+              <span>Sign Out</span>
+            </button>
+          )}
         </div>
       )}
     </header>

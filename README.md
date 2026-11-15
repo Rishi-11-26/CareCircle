@@ -2,7 +2,7 @@
 
 > **Platform:** Elderly Care & Medication Management Platform  
 > **Repository:** [https://github.com/Rishi-11-26/CareCircle](https://github.com/Rishi-11-26/CareCircle)  
-> **Production Status:** Hardened Integrated Web Service | Dedicated Supabase PostgreSQL Schema | 65/65 Automated, Integration & Database Security Tests Passing (100% across 12 Test Suites)
+> **Production Status:** Hardened Integrated Web Service | Dedicated Supabase PostgreSQL Schema | Real Supabase Auth & Multi-Circle Authorization | 75/75 Automated, Integration & Database Security Tests Passing (100% across 13 Test Suites)
 
 ---
 
@@ -225,6 +225,15 @@ erDiagram
 - **Transient Email Failure & Retry Pipeline:** When external email delivery fails (e.g., transient network timeout connecting to Resend), the record is marked `email_status = 'failed'` with the captured error string. Subsequent scheduler iterations re-select unacknowledged notifications with `email_status IN ('pending', 'failed')` to retry delivery without creating duplicate notification rows.
 - **Single Canonical Database Migration Sequence:** `supabase/migrations/master_migration.sql` serves as the complete, self-contained clean installation script for the entire database. Incremental versioned migrations (`20260301000000` through `20260301000003`) are fully reconciled with identical immutability, rate limiting, and security constraints.
 
+### F. Real Supabase Authentication, Session Persistence & Multi-Circle Authorization
+- **Accessible Auth Flows:** Complete dedicated pages for `/login`, `/signup`, `/forgot-password`, and `/reset-password` matching CareCircle's Warm Ivory, Forest Green, and Sage visual identity with 52px+ touch targets and screen-reader accessibility.
+- **Session Restoration & Real-time State:** `CareContext` restores session credentials on app launch using `supabase.auth.getSession()` and reacts dynamically to token refreshes and login/logout events with `supabase.auth.onAuthStateChange()`.
+- **Identity Linkage & Automated Triggers:** Registered users have `auth.users.id` linked directly to `public.profiles.id`. Trigger `on_auth_user_created` creates the initial profile with role and IANA timezone, and trigger `on_care_profile_created` automatically provisions the owner's active membership in `public.care_members`.
+- **Route Guarding (`AuthRouteGuard`):** Protects all clinical, medication, care circle, intelligence, and timeline routes, redirecting unauthenticated users to `/login`.
+- **Multi-Care Circle Management (`CareCircleSwitcher`):** Supports users managing multiple elderly family members through an accessible dropdown switcher in the navigation bar.
+- **Empty-Circle Onboarding (`NoCircleOnboarding`):** Guides new users who belong to 0 circles to redeem an invitation passcode or create a new senior healthcare profile.
+- **Production Mode Separation:** Completely eliminates silent demo fallbacks when Supabase is configured; isolates synthetic evaluator personas strictly to explicit demo mode.
+
 ---
 
 ## 5. Role-Based Experience & Accessibility Design Principles
@@ -271,7 +280,8 @@ npm test -- --run
 | `tests/analytics.test.ts` | Adherence percentage math, streak counting, correction handling | 2 | **PASS** |
 | `tests/workflows.test.tsx` | React UI flows, dose confirmation cards, modal interactions | 9 | **PASS** |
 | `tests/roleNavigationAndAccessibility.test.tsx` | 4-tab role separation, Large Print Mode state, Call Family | 9 | **PASS** |
-| **TOTAL** | **12 Distinct Test Suites** | **65 Tests** | **100% PASS** |
+| `tests/authAndSession.test.tsx` | Supabase Auth, session persistence, route guards, multi-circle switcher, password recovery | 10 | **PASS** |
+| **TOTAL** | **13 Distinct Test Suites** | **75 Tests** | **100% PASS** |
 
 ### Production Build Verification
 Production compilation via Vite 6 and TypeScript 5.7 succeeds with zero warnings:

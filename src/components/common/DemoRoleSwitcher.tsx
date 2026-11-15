@@ -3,7 +3,7 @@ import { useCare } from '@/contexts/CareContext';
 import { Sparkles, ChevronDown, ChevronUp, X, EyeOff } from 'lucide-react';
 
 export const DemoRoleSwitcher: React.FC = () => {
-  const { currentUser, switchRole } = useCare();
+  const { currentUser, switchRole, isDemoMode } = useCare();
   // Collapsed by default as required
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [isDismissed, setIsDismissed] = useState(false);
@@ -26,8 +26,8 @@ export const DemoRoleSwitcher: React.FC = () => {
     }
   }, []);
 
-  // Completely absent in production mode or if dismissed by evaluator
-  if (isProduction || isDismissed) {
+  // Completely absent in production mode, if disabled, or if dismissed by evaluator
+  if (isProduction || isDismissed || !isDemoMode) {
     return null;
   }
 

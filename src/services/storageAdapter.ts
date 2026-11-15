@@ -715,15 +715,115 @@ class StorageDataService {
 
   // --- Care Profiles & Members ---
   getInitialCareProfile(): CareProfile | null {
+    if (isSupabaseConfigured()) {
+      return null;
+    }
     return this.inMemoryCache.careProfiles[0] || null;
   }
 
   async getCareProfiles(): Promise<CareProfile[]> {
     if (isSupabaseConfigured() && supabase) {
       const { data, error } = await supabase.from('care_profiles').select('*');
-      if (!error && data) return data;
+      if (error) {
+        console.warn('[StorageAdapter] getCareProfiles query error:', error.message);
+        return [];
+      }
+      return data || [];
     }
     return this.inMemoryCache.careProfiles;
+  }
+
+  async createCareProfile(params: {
+    fullName: string;
+    preferredName?: string;
+    dateOfBirth?: string;
+    bloodGroup?: string;
+    allergies?: string[];
+    emergencyPhone?: string;
+    address?: string;
+    medicalNotes?: string;
+    assistanceLevel?: AssistanceLevel;
+    timezone: string;
+    ownerId?: string;
+  }): Promise<CareProfile> {
+    const defaultTz = params.timezone || DEFAULT_PROFILE_TIMEZONE;
+
+    if (isSupabaseConfigured() && supabase) {
+      let ownerId = params.ownerId;
+      if (!ownerId) {
+        const { data: authData } = await supabase.auth.getUser();
+        ownerId = authData.user?.id;
+      }
+      if (!ownerId) {
+        throw new Error('Authenticated user ID is required to create a care profile');
+      }
+
+      const payload = {
+        owner_id: ownerId,
+        full_name: params.fullName.trim(),
+        preferred_name: params.preferredName?.trim() || null,
+        date_of_birth: params.dateOfBirth || null,
+        blood_group: params.bloodGroup?.trim() || null,
+        allergies: params.allergies || [],
+        emergency_phone: params.emergencyPhone?.trim() || null,
+        address: params.address?.trim() || null,
+        medical_notes: params.medicalNotes?.trim() || null,
+        assistance_level: params.assistanceLevel || 'independent',
+        timezone: defaultTz,
+      };
+
+      const { data, error } = await supabase
+        .from('care_profiles')
+        .insert(payload)
+        .select()
+        .single();
+
+      if (error) {
+        throw new Error(`Failed to create care profile: ${error.message}`);
+      }
+      return data as CareProfile;
+    }
+
+    // In-memory fallback for local demo or tests
+    const newId = `profile_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const newOwnerId = params.ownerId || this.getCurrentUser()?.id || 'user_margaret';
+
+    const newProfile: CareProfile = {
+      id: newId,
+      owner_id: newOwnerId,
+      full_name: params.fullName.trim(),
+      preferred_name: params.preferredName?.trim() || params.fullName.split(' ')[0],
+      date_of_birth: params.dateOfBirth,
+      blood_group: params.bloodGroup,
+      allergies: params.allergies || [],
+      emergency_phone: params.emergencyPhone,
+      address: params.address,
+      medical_notes: params.medicalNotes,
+      assistance_level: params.assistanceLevel || 'independent',
+      timezone: defaultTz,
+      created_at: new Date().toISOString(),
+    };
+
+    this.inMemoryCache.careProfiles.push(newProfile);
+
+    const newMember: CareMember = {
+      id: `member_${Date.now()}`,
+      care_profile_id: newId,
+      user_id: newOwnerId,
+      role: 'owner',
+      can_manage_medications: true,
+      can_manage_appointments: true,
+      can_invite_members: true,
+      can_acknowledge_alerts: true,
+      receive_email_alerts: true,
+      status: 'active',
+      joined_at: new Date().toISOString(),
+      profile: this.getCurrentUser() || undefined,
+    };
+    this.inMemoryCache.careMembers.push(newMember);
+    this.saveAll();
+
+    return newProfile;
   }
 
   async getCareProfile(id: string): Promise<CareProfile | null> {

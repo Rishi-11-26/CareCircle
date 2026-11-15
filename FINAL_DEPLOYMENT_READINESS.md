@@ -16,11 +16,37 @@
 - **Direct Commit URL:** [https://github.com/Rishi-11-26/CareCircle/commits/main](https://github.com/Rishi-11-26/CareCircle/commits/main)
 - **Working Tree State:** Clean; all recent security remediations committed and pushed to `origin/main`.
 - **Secret Scan:** Verified clean. Zero live JWTs, service role keys, or Resend credentials exist in tracked files or commit history (`.env` is gitignored; only `.env.example` template is tracked).
-- **Documentation Alignment:** `README.md` and `FINAL_ENGINEERING_REPORT.md` reflect actual code implementation and 65 passing tests across 12 suites.
+- **Documentation Alignment:** `README.md` and `FINAL_ENGINEERING_REPORT.md` reflect actual code implementation and 75 passing tests across 13 suites.
 
 ---
 
-## 2. Canonical Supabase Migration Audit
+## 2. Supabase Authentication & Multi-Circle Authorization Architecture
+
+### A. End-to-End Supabase Auth Implementation
+- **Authentication Routes:** Fully implemented accessible auth views at `/login`, `/signup`, `/forgot-password`, and `/reset-password` adhering to CareCircle's visual identity (Warm ivory `#FAF8F5`, Forest green `#1B4332`, Sage accents `#D8F3DC`, 52px+ touch targets).
+- **Session Restoration & Real-Time Sync:** `CareContext` initializes sessions via `supabase.auth.getSession()` and subscribes to state transitions via `supabase.auth.onAuthStateChange()`. Sessions persist reliably across hard page refreshes.
+- **Route Guarding:** `AuthRouteGuard` protects all clinical, medication, care circle, intelligence, and timeline routes, redirecting unauthenticated users to `/login` with location redirect intent.
+- **Password Recovery & Reset:** Implemented `requestPasswordReset` sending recovery emails and `updateUserPassword` validating matching inputs and updating passwords via authenticated recovery sessions.
+
+### B. User Profile & Circle Auto-Provisioning
+- **Identity Linkage:** Uses `auth.users.id` directly as `public.profiles.id`. Never generates synthetic user IDs for live database writes.
+- **Profile Provisioning Trigger:** Function `handle_new_user()` and trigger `on_auth_user_created` automatically provision a `public.profiles` record with full name, role (`elderly` | `family` | `caretaker`), and explicit IANA timezone on signup.
+- **Owner Membership Trigger:** Function `handle_new_care_profile()` and trigger `on_care_profile_created` automatically register the care profile creator in `public.care_members` with owner role and full administrative permissions.
+
+### C. Multi-Care Circle Support & Onboarding
+- **Dynamic Circle Discovery:** Circle members discover authorized circles strictly through PostgreSQL RLS via `is_care_member(id)`.
+- **CareCircleSwitcher Component:** Multi-circle selector in the navigation bar allowing users to seamlessly transition between elderly family members without hardcoding `profiles[0]`.
+- **NoCircleOnboarding Component:** Clean, accessible onboarding screen presented to users with 0 care circles, offering two immediate paths:
+  1. Redeem an 8-character invitation passcode via `redeem_invitation` RPC.
+  2. Create a new care profile with full demographic and timezone configuration.
+
+### D. Production Authentication Bypass Elimination
+- **Strict Mode Separation:** Eliminated silent Margaret Hayes seed-data fallback in `storageAdapter.ts` when Supabase is configured. Unauthenticated queries return empty states or trigger route guards rather than masking live database state.
+- **Evaluator Dock Isolation:** `DemoRoleSwitcher` is strictly hidden in production mode (`carecircle_production_mode=true` or when demo mode is inactive). Evaluator mode is preserved with an explicit pill badge for testing without disrupting production security.
+
+---
+
+## 3. Canonical Supabase Migration Audit
 
 ### A. Installation Consistency & Parity
 - **Canonical Clean Install:** `supabase/migrations/master_migration.sql` is completely self-contained. It defines the entire schema (12 relational tables), compound indexes, partial unique indexes, row-level security policies, RPCs, triggers, and least-privilege grants in an idempotent, transaction-safe block.

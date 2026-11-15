@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import { Session, User } from '@supabase/supabase-js';
 import {
   UserProfile,
+  UserRole,
   CareProfile,
   CareMember,
   Medication,
@@ -15,13 +17,63 @@ import {
   FollowUpStatus,
 } from '@/types';
 import { dataService } from '@/services/storageAdapter';
+import {
+  supabase,
+  isSupabaseConfigured,
+  signUpUser,
+  signInUser,
+  signOutUser,
+  requestPasswordReset,
+  updateUserPassword,
+  fetchUserProfile,
+} from '@/lib/supabase';
 import { analyzeCareEvents, CareIntelligenceReport } from '@/lib/careIntelligence';
 import { calculateAdherenceMetrics } from '@/lib/analytics';
 
 interface CareContextType {
+  // Authentication & Session
+  session: Session | null;
+  authUser: User | null;
   currentUser: UserProfile;
-  switchRole: (role: 'elderly' | 'family' | 'caretaker') => void;
+  isAuthenticated: boolean;
+  authLoading: boolean;
+  isLoading: boolean;
+  isDemoMode: boolean;
+  setDemoMode: (enabled: boolean) => void;
+
+  signUp: (params: {
+    email: string;
+    password: string;
+    fullName: string;
+    role: UserRole;
+    timezone: string;
+  }) => Promise<{ user: User | null; error: string | null }>;
+  signIn: (email: string, password: string) => Promise<{ user: User | null; error: string | null }>;
+  signOut: () => Promise<void>;
+  resetPassword: (email: string) => Promise<{ error: string | null }>;
+  updatePassword: (newPassword: string) => Promise<{ error: string | null }>;
+
+  // Multi-care circle state & operations
+  careProfiles: CareProfile[];
   careProfile: CareProfile | null;
+  selectCareProfile: (id: string) => void;
+  createCareProfile: (params: {
+    fullName: string;
+    preferredName?: string;
+    dateOfBirth?: string;
+    bloodGroup?: string;
+    allergies?: string[];
+    emergencyPhone?: string;
+    address?: string;
+    medicalNotes?: string;
+    assistanceLevel?: AssistanceLevel;
+    timezone: string;
+  }) => Promise<CareProfile>;
+
+  // Role simulation (for demo / evaluator)
+  switchRole: (role: 'elderly' | 'family' | 'caretaker') => void;
+
+  // Domain data & clinical context
   careMembers: CareMember[];
   medications: Medication[];
   doseLogs: DoseLog[];
@@ -30,11 +82,10 @@ interface CareContextType {
   activityLogs: ActivityLog[];
   intelligenceReport: CareIntelligenceReport;
   adherenceMetrics: AdherenceAnalytics;
-  isLoading: boolean;
   unreadAlertsCount: number;
   assistanceLevel: AssistanceLevel;
 
-  // Actions
+  // Clinical & medication actions
   recordDose: (params: {
     medicationId: string;
     scheduleId?: string;
@@ -91,12 +142,31 @@ interface CareContextType {
 const CareContext = createContext<CareContextType | undefined>(undefined);
 
 export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<UserProfile>(
-    () => dataService.getCurrentUser() || dataService.switchUserRole('elderly')
+  // Session & Auth state
+  const [session, setSession] = useState<Session | null>(null);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // Demo mode detection
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
+    if (!isSupabaseConfigured()) return true;
+    const prodMode = localStorage.getItem('carecircle_production_mode') === 'true';
+    if (prodMode) return false;
+    const forcedDemo = localStorage.getItem('carecircle_demo_mode');
+    return forcedDemo === 'true';
+  });
+
+  const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
+    return dataService.getCurrentUser() || dataService.switchUserRole('elderly');
+  });
+
+  // Care profile state
+  const [careProfiles, setCareProfiles] = useState<CareProfile[]>([]);
+  const [careProfile, setCareProfile] = useState<CareProfile | null>(() =>
+    dataService.getInitialCareProfile()
   );
-  const [careProfile, setCareProfile] = useState<CareProfile | null>(
-    () => dataService.getInitialCareProfile()
-  );
+
+  // Clinical domain entities
   const [careMembers, setCareMembers] = useState<CareMember[]>([]);
   const [medications, setMedications] = useState<Medication[]>([]);
   const [doseLogs, setDoseLogs] = useState<DoseLog[]>([]);
@@ -105,21 +175,92 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Helper to load or synchronize user profile
+  const loadUserProfile = useCallback(async (userId: string, email?: string) => {
+    try {
+      const profile = await fetchUserProfile(userId);
+      if (profile) {
+        setCurrentUser(profile);
+        dataService.setCurrentUser(profile);
+      } else {
+        const fallbackProfile: UserProfile = {
+          id: userId,
+          email: email || '',
+          full_name: email?.split('@')[0] || 'CareCircle User',
+          role: 'family',
+          created_at: new Date().toISOString(),
+        };
+        setCurrentUser(fallbackProfile);
+        dataService.setCurrentUser(fallbackProfile);
+      }
+    } catch (err) {
+      console.warn('[CareContext] Failed to load user profile:', err);
+    }
+  }, []);
+
+  // Supabase Auth Initialization & Real-Time Listener
+  useEffect(() => {
+    if (!isSupabaseConfigured() || !supabase) {
+      setAuthLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+
+    // 1. Restore existing session
+    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+      if (!isMounted) return;
+      setSession(initialSession);
+      setAuthUser(initialSession?.user ?? null);
+      if (initialSession?.user) {
+        loadUserProfile(initialSession.user.id, initialSession.user.email);
+      }
+      setAuthLoading(false);
+    }).catch(err => {
+      console.warn('[CareContext] Error restoring session:', err);
+      if (isMounted) setAuthLoading(false);
+    });
+
+    // 2. Subscribe to auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      if (!isMounted) return;
+      setSession(newSession);
+      setAuthUser(newSession?.user ?? null);
+
+      if (newSession?.user) {
+        await loadUserProfile(newSession.user.id, newSession.user.email);
+      }
+      setAuthLoading(false);
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [loadUserProfile]);
+
+  // Main data synchronization
   const refreshData = useCallback(async () => {
     try {
       setIsLoading(true);
       const profiles = await dataService.getCareProfiles();
-      const currentCP = profiles[0] || null;
-      setCareProfile(currentCP);
+      setCareProfiles(profiles);
 
-      if (currentCP) {
+      const savedProfileId = localStorage.getItem('carecircle_selected_profile_id');
+      const matchedProfile = profiles.find(p => p.id === savedProfileId);
+      const activeCP = matchedProfile || profiles[0] || null;
+      setCareProfile(activeCP);
+
+      if (activeCP) {
         const [members, meds, doses, apts, notifs, acts] = await Promise.all([
-          dataService.getCareMembers(currentCP.id),
-          dataService.getMedications(currentCP.id),
-          dataService.getDoseLogs(currentCP.id),
-          dataService.getAppointments(currentCP.id),
-          dataService.getNotifications(currentCP.id),
-          dataService.getActivityLogs(currentCP.id),
+          dataService.getCareMembers(activeCP.id),
+          dataService.getMedications(activeCP.id),
+          dataService.getDoseLogs(activeCP.id),
+          dataService.getAppointments(activeCP.id),
+          dataService.getNotifications(activeCP.id),
+          dataService.getActivityLogs(activeCP.id),
         ]);
 
         setCareMembers(members);
@@ -128,7 +269,16 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setAppointments(apts);
         setNotifications(notifs);
         setActivityLogs(acts);
+      } else {
+        setCareMembers([]);
+        setMedications([]);
+        setDoseLogs([]);
+        setAppointments([]);
+        setNotifications([]);
+        setActivityLogs([]);
       }
+    } catch (err) {
+      console.warn('[CareContext] Error refreshing data:', err);
     } finally {
       setIsLoading(false);
     }
@@ -136,13 +286,142 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     refreshData();
-  }, [refreshData]);
+  }, [refreshData, session]);
+
+  const selectCareProfile = useCallback(
+    async (id: string) => {
+      localStorage.setItem('carecircle_selected_profile_id', id);
+      const target = careProfiles.find(p => p.id === id) || null;
+      setCareProfile(target);
+
+      if (target) {
+        setIsLoading(true);
+        try {
+          const [members, meds, doses, apts, notifs, acts] = await Promise.all([
+            dataService.getCareMembers(target.id),
+            dataService.getMedications(target.id),
+            dataService.getDoseLogs(target.id),
+            dataService.getAppointments(target.id),
+            dataService.getNotifications(target.id),
+            dataService.getActivityLogs(target.id),
+          ]);
+
+          setCareMembers(members);
+          setMedications(meds);
+          setDoseLogs(doses);
+          setAppointments(apts);
+          setNotifications(notifs);
+          setActivityLogs(acts);
+        } finally {
+          setIsLoading(false);
+        }
+      }
+    },
+    [careProfiles]
+  );
+
+  const createCareProfile = async (params: {
+    fullName: string;
+    preferredName?: string;
+    dateOfBirth?: string;
+    bloodGroup?: string;
+    allergies?: string[];
+    emergencyPhone?: string;
+    address?: string;
+    medicalNotes?: string;
+    assistanceLevel?: AssistanceLevel;
+    timezone: string;
+  }) => {
+    const ownerId = authUser?.id || currentUser.id;
+    const newProfile = await dataService.createCareProfile({
+      ...params,
+      ownerId,
+    });
+    localStorage.setItem('carecircle_selected_profile_id', newProfile.id);
+    await refreshData();
+    return newProfile;
+  };
 
   const switchRole = (role: 'elderly' | 'family' | 'caretaker') => {
     const newUser = dataService.switchUserRole(role);
     setCurrentUser({ ...newUser });
   };
 
+  const setDemoMode = (enabled: boolean) => {
+    setIsDemoMode(enabled);
+    localStorage.setItem('carecircle_demo_mode', enabled ? 'true' : 'false');
+    if (enabled) {
+      dataService.resetToDemoSeed();
+      const newUser = dataService.getCurrentUser() || dataService.switchUserRole('elderly');
+      setCurrentUser(newUser);
+    }
+    refreshData();
+  };
+
+  // Auth Operations
+  const signUp = async (params: {
+    email: string;
+    password: string;
+    fullName: string;
+    role: UserRole;
+    timezone: string;
+  }) => {
+    setIsLoading(true);
+    try {
+      const res = await signUpUser(params);
+      if (res.user) {
+        setAuthUser(res.user);
+        setSession(res.session);
+        await loadUserProfile(res.user.id, params.email);
+        await refreshData();
+      }
+      return { user: res.user, error: res.error };
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const signIn = async (email: string, password: string) => {
+    setIsLoading(true);
+    try {
+      const res = await signInUser(email, password);
+      if (res.user) {
+        setAuthUser(res.user);
+        setSession(res.session);
+        await loadUserProfile(res.user.id, email);
+        await refreshData();
+      }
+      return { user: res.user, error: res.error };
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const signOut = async () => {
+    setIsLoading(true);
+    try {
+      await signOutUser();
+      setSession(null);
+      setAuthUser(null);
+      localStorage.removeItem('carecircle_selected_profile_id');
+      if (!isDemoMode) {
+        setCareProfile(null);
+        setCareProfiles([]);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const resetPassword = async (email: string) => {
+    return await requestPasswordReset(email);
+  };
+
+  const updatePassword = async (newPassword: string) => {
+    return await updateUserPassword(newPassword);
+  };
+
+  // Domain Actions
   const recordDose = async (params: {
     medicationId: string;
     scheduleId?: string;
@@ -328,25 +607,38 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   }, [careProfile, doseLogs, appointments, notifications]);
 
-  // Adherence analytics
   const adherenceMetrics = useMemo(() => {
     return calculateAdherenceMetrics(doseLogs, 7);
   }, [doseLogs]);
 
-  // Unread urgent notifications count
   const unreadAlertsCount = useMemo(() => {
     return notifications.filter(n => n.status === 'pending' || n.status === 'sent').length;
   }, [notifications]);
 
-  // Assistance level
   const assistanceLevel: AssistanceLevel = careProfile?.assistance_level || 'independent';
+  const isAuthenticated = Boolean(session?.user || isDemoMode);
 
   return (
     <CareContext.Provider
       value={{
+        session,
+        authUser,
         currentUser,
-        switchRole,
+        isAuthenticated,
+        authLoading,
+        isLoading,
+        isDemoMode,
+        setDemoMode,
+        signUp,
+        signIn,
+        signOut,
+        resetPassword,
+        updatePassword,
+        careProfiles,
         careProfile,
+        selectCareProfile,
+        createCareProfile,
+        switchRole,
         careMembers,
         medications,
         doseLogs,
@@ -355,7 +647,6 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
         activityLogs,
         intelligenceReport,
         adherenceMetrics,
-        isLoading,
         unreadAlertsCount,
         assistanceLevel,
         recordDose,
