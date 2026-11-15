@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useCare } from '@/contexts/CareContext';
-import { Sparkles, ChevronDown, ChevronUp, X, EyeOff } from 'lucide-react';
+import { Sparkles, ChevronDown, ChevronUp, EyeOff } from 'lucide-react';
 
 export const DemoRoleSwitcher: React.FC = () => {
   const { currentUser, switchRole, isDemoMode } = useCare();

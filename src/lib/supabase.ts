@@ -116,8 +116,9 @@ export async function requestPasswordReset(email: string): Promise<{ error: stri
     return { error: 'Database is not configured' };
   }
 
+  const redirectOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://carecircle.onrender.com';
   const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
-    redirectTo: `${window.location.origin}/reset-password`,
+    redirectTo: `${redirectOrigin}/reset-password`,
   });
 
   return { error: error ? error.message : null };

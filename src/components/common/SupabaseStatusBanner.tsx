@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { Database, Zap, CheckCircle2, AlertCircle, RefreshCw, X } from 'lucide-react';
+import { Database, Zap, CheckCircle2, X } from 'lucide-react';
 import { useCare } from '@/contexts/CareContext';
 
 export const SupabaseStatusBanner: React.FC = () => {

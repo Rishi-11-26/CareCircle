@@ -1,6 +1,6 @@
 import React from 'react';
 import { useCare } from '@/contexts/CareContext';
-import { Phone, X, AlertCircle, Heart, User } from 'lucide-react';
+import { Phone, X, AlertCircle } from 'lucide-react';
 
 interface CallFamilyModalProps {
   isOpen: boolean;

@@ -47,11 +47,8 @@ export const LoginPage: React.FC = () => {
   };
 
   const handleLaunchDemo = () => {
-    localStorage.setItem('carecircle_demo_mode', 'true');
-    localStorage.setItem('carecircle_selected_profile_id', 'profile_margaret');
     setDemoMode(true);
-    window.location.href = '/';
-    window.location.reload();
+    navigate('/', { replace: true });
   };
 
   return (

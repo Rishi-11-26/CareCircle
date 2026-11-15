@@ -1739,7 +1739,13 @@ class StorageDataService {
 
   // Reset to original demo seed
   resetToDemoSeed() {
-    localStorage.clear();
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.clear();
+        localStorage.setItem('carecircle_demo_mode', 'true');
+        localStorage.setItem('carecircle_selected_profile_id', 'profile_margaret');
+      }
+    } catch {}
     this.failedAttempts = {};
     this.inMemoryCache.initialized = false;
     this.init();

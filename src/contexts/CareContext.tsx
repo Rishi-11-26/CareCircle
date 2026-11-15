@@ -10,7 +10,6 @@ import {
   Appointment,
   Notification,
   ActivityLog,
-  CareInsight,
   AdherenceAnalytics,
   AssistanceLevel,
   DoseEventSource,
@@ -359,18 +358,21 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const setDemoMode = (enabled: boolean) => {
     setIsDemoMode(enabled);
-    localStorage.setItem('carecircle_demo_mode', enabled ? 'true' : 'false');
     dataService.setDemoMode(enabled);
     if (enabled) {
       dataService.resetToDemoSeed();
+      localStorage.setItem('carecircle_demo_mode', 'true');
+      localStorage.setItem('carecircle_selected_profile_id', 'profile_margaret');
       const newUser = dataService.getCurrentUser() || dataService.switchUserRole('elderly');
       setCurrentUser(newUser);
-      localStorage.setItem('carecircle_selected_profile_id', 'profile_margaret');
       const initial = dataService.getInitialCareProfile();
       if (initial) {
         setCareProfile(initial);
         setCareProfiles([initial]);
       }
+    } else {
+      localStorage.removeItem('carecircle_demo_mode');
+      localStorage.removeItem('carecircle_selected_profile_id');
     }
     refreshData();
   };
@@ -654,7 +656,11 @@ export const CareProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [notifications]);
 
   const assistanceLevel: AssistanceLevel = careProfile?.assistance_level || 'independent';
-  const isAuthenticated = Boolean(session?.user || isDemoMode);
+  const isAuthenticated = Boolean(
+    session?.user ||
+    isDemoMode ||
+    (typeof window !== 'undefined' && localStorage.getItem('carecircle_demo_mode') === 'true')
+  );
 
   return (
     <CareContext.Provider

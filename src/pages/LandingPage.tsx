@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useCare } from '@/contexts/CareContext';
 import {
   Heart,
@@ -18,7 +18,14 @@ import {
 } from 'lucide-react';
 
 export const LandingPage: React.FC = () => {
-  const { switchRole } = useCare();
+  const { switchRole, setDemoMode } = useCare();
+  const navigate = useNavigate();
+
+  const handleLaunchRole = (role: 'elderly' | 'family' | 'caretaker', targetPath: string = '/') => {
+    setDemoMode(true);
+    switchRole(role);
+    navigate(targetPath);
+  };
 
   return (
     <div className="space-y-16 animate-in fade-in duration-300">
@@ -40,47 +47,48 @@ export const LandingPage: React.FC = () => {
 
         {/* Primary CTAs with Role Presets */}
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-          <Link
-            to="/"
-            onClick={() => switchRole('elderly')}
-            className="px-6 py-3 rounded-2xl bg-forest text-ivory text-base font-bold hover:bg-forest-light shadow-warm transition-all touch-target-elderly flex items-center gap-2"
+          <button
+            type="button"
+            onClick={() => handleLaunchRole('elderly')}
+            className="px-6 py-3 rounded-2xl bg-forest text-ivory text-base font-bold hover:bg-forest-light shadow-warm transition-all touch-target-elderly flex items-center gap-2 cursor-pointer"
           >
             <span>Launch Elderly Dashboard</span>
             <ArrowRight className="w-4 h-4" />
-          </Link>
+          </button>
 
-          <Link
-            to="/intelligence"
-            className="px-6 py-3 rounded-2xl border border-stone bg-white text-forest text-base font-semibold hover:bg-stone-light shadow-warm-sm transition-all"
+          <button
+            type="button"
+            onClick={() => handleLaunchRole('family', '/intelligence')}
+            className="px-6 py-3 rounded-2xl border border-stone bg-white text-forest text-base font-semibold hover:bg-stone-light shadow-warm-sm transition-all cursor-pointer"
           >
             Explore Care Intelligence
-          </Link>
+          </button>
         </div>
 
         {/* Quick persona preview pills */}
         <div className="pt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-charcoal-muted">
           <span>Jump into demo as:</span>
-          <Link
-            to="/"
-            onClick={() => switchRole('elderly')}
-            className="px-3 py-1 rounded-lg bg-stone hover:bg-stone-dark/20 text-charcoal font-medium"
+          <button
+            type="button"
+            onClick={() => handleLaunchRole('elderly')}
+            className="px-3 py-1 rounded-lg bg-stone hover:bg-stone-dark/20 text-charcoal font-medium cursor-pointer"
           >
             👵 Margaret (Elderly Individual)
-          </Link>
-          <Link
-            to="/"
-            onClick={() => switchRole('family')}
-            className="px-3 py-1 rounded-lg bg-stone hover:bg-stone-dark/20 text-charcoal font-medium"
+          </button>
+          <button
+            type="button"
+            onClick={() => handleLaunchRole('family')}
+            className="px-3 py-1 rounded-lg bg-stone hover:bg-stone-dark/20 text-charcoal font-medium cursor-pointer"
           >
             👨‍👧 David (Family Member)
-          </Link>
-          <Link
-            to="/"
-            onClick={() => switchRole('caretaker')}
-            className="px-3 py-1 rounded-lg bg-stone hover:bg-stone-dark/20 text-charcoal font-medium"
+          </button>
+          <button
+            type="button"
+            onClick={() => handleLaunchRole('caretaker')}
+            className="px-3 py-1 rounded-lg bg-stone hover:bg-stone-dark/20 text-charcoal font-medium cursor-pointer"
           >
             🩺 Elena (Registered Caretaker)
-          </Link>
+          </button>
         </div>
       </section>
 

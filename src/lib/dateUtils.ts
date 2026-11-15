@@ -139,7 +139,6 @@ export function validateConfirmationWindow(
   gracePeriodMinutes: number = 45
 ): { allowed: boolean; isEarly: boolean; isLate: boolean; minutesUntil: number; minutesPast: number; reason?: string } {
   const now = new Date();
-  const [h, m] = scheduledTime.split(':').map(Number);
   
   const sched = new Date(`${scheduledDate}T${scheduledTime}:00`);
   if (isNaN(sched.getTime())) {
