@@ -26,7 +26,7 @@ export const DoctorVisitBriefModal: React.FC<DoctorVisitBriefModalProps> = ({
 }) => {
   const { careProfile, medications, doseLogs, careMembers } = useCare();
 
-  const timezone = careProfile?.timezone || 'America/Los_Angeles';
+  const timezone = careProfile?.timezone || 'UTC';
   const personName = careProfile?.full_name || 'Margaret Hayes';
 
   // Calculate 14-day adherence

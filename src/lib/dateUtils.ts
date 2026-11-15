@@ -3,7 +3,7 @@
  * Ensures consistent handling of profile timezones, preventing naive-local/UTC confusion.
  */
 
-export const DEFAULT_PROFILE_TIMEZONE = 'America/Los_Angeles';
+export const DEFAULT_PROFILE_TIMEZONE = 'UTC';
 
 /**
  * Accurately converts a local wall-clock date and time in an arbitrary IANA timezone

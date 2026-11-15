@@ -5,7 +5,7 @@
 **Vertical:** Elderly Care & Medication Management Platform  
 **Target Repository:** [https://github.com/Rishi-11-26/CareCircle](https://github.com/Rishi-11-26/CareCircle)  
 **Dedicated Supabase URL:** `https://irkbphurzdhghptwfemz.supabase.co`  
-**Test Suite Results:** 56 / 56 Tests Passing (100% Pass Rate across 11 Test Suites)  
+**Test Suite Results:** 64 / 64 Tests Passing (100% Pass Rate across 12 Test Suites)  
 **Production Build Status:** Clean Compilation (0 TypeScript errors, code-split bundles)
 
 ---
@@ -85,6 +85,22 @@ Following independent review of the published migrations and application impleme
   1. Clarified passcode security as **Cryptographic SHA-256 One-Way Passcode Hashing** with $>30$ bits of entropy and brute-force lockout (not zero-knowledge proofs).
   2. Clarified accessibility as **WCAG 2.2 AA-Inspired High-Accessibility Design Principles** (minimum 52px touch targets across all standard controls, scaling to 56px+ in Large Print Mode).
 
+### Defect 8: Reconciled Canonical Migration Sequence (P0 - Database Architecture)
+- **Problem:** Incremental versioned migration `20260301000002` retained legacy `UPDATE dose_logs SET is_corrected = TRUE` statements and `'America/Los_Angeles'` fallbacks, creating conflicting definitions between clean installs and incremental upgrades.
+- **Remediation:**
+  1. Purged all `UPDATE dose_logs SET is_corrected = TRUE` and timezone fallbacks from `20260301000002_assisted_care_and_integrity.sql`.
+  2. Established `supabase/migrations/master_migration.sql` as the single canonical clean-installation script. It defines the complete schema, indexes, RLS policies, RPCs, triggers, rate limit tables, views, and least-privilege grants in one idempotent transaction.
+  3. Reconciled incremental migrations (`20260301000000` through `20260301000003`) so that applying either the single canonical script or the incremental series produces an identical database state.
+
+### Defect 9: Node Server Endpoint Hardening & Fail-Closed Scheduler Authentication (P0 - Security & Concurrency)
+- **Problem:** `/api/scheduler/run-escalations` did not fail closed when `CRON_SECRET` was unconfigured; `/api/send-email` permitted unauthenticated direct client invocation (open relay risk); `runEscalationCycle` lacked strict enforcement of the service-role key; and concurrent scheduler runs could create duplicate notifications.
+- **Remediation:**
+  1. **Fail-Closed Secret Check:** `/api/scheduler/run-escalations` returns HTTP 503 Service Unavailable when `CRON_SECRET` is unset; returns HTTP 401 Unauthorized when invalid; and returns HTTP 500 when the cycle fails.
+  2. **Direct Client Email Rejection:** `/api/send-email` returns HTTP 403 Forbidden to reject direct client dispatches. All system notifications are sent server-side by the background worker.
+  3. **Strict Service Role Key:** `runEscalationCycle` strictly requires `SUPABASE_SERVICE_ROLE_KEY`; never falls back to `VITE_SUPABASE_ANON_KEY`; fails closed if missing.
+  4. **Scheduler Concurrency Deduplication:** Added unique partial index `uq_notifications_escalation_dose` on `(care_profile_id, category, (metadata->>'dose_identity'))` preventing duplicate notifications across concurrent workers.
+  5. **Email Retry Pipeline:** Failed email transmissions record `email_status = 'failed'` and captured errors without suppressing retries; subsequent scheduler cycles select unacknowledged notifications with `email_status IN ('pending', 'failed')` and retry transmission safely.
+
 ---
 
 ## 2. Feature Verification & Implementation Classification
@@ -102,9 +118,10 @@ Following independent review of the published migrations and application impleme
 | **Doctor Visit Clinical Brief (Print & View)** | `VERIFIED` | Verified in browser UI inspection and component rendering tests. |
 | **Adherence Analytics Math & Streak Logic** | `VERIFIED` | 2 tests in `tests/analytics.test.ts` pass with 100% precision. |
 | **Single Integrated Node Web Service & Health API**| `VERIFIED` | Executed `node server/index.mjs`; `/api/health` returned HTTP 200. |
-| **Production Vite Compilation & Code Splitting** | `VERIFIED` | `tsc && vite build` completed in 5.1s; 0 errors; all chunks $<40$ kB. |
-| **Supabase Remote DDL Migration** | `IMPLEMENTED` | `supabase/migrations/master_migration.sql` prepared for manual execution by project owner. |
-| **Resend Live Email Delivery** | `IMPLEMENTED` | `/api/send-email` and scheduler integration implemented; requires user's live `RESEND_API_KEY`. |
+| **Production Vite Compilation & Code Splitting** | `VERIFIED` | `tsc && vite build` completed in 7.3s; 0 errors; all chunks $<40$ kB. |
+| **Node Server Security & Scheduler Concurrency** | `VERIFIED` | 8 tests in `tests/nodeServerSecurityAndScheduler.test.ts`: fail-closed CRON_SECRET, 403 /api/send-email, deduplication index, email retry, clean DDL. |
+| **Canonical Supabase Clean-Install Migration** | `IMPLEMENTED` | `supabase/migrations/master_migration.sql` prepared for manual execution by project owner. |
+| **Resend Live Email Delivery Pipeline** | `IMPLEMENTED` | Server scheduler pipeline with retry handling implemented; requires user's live `RESEND_API_KEY`. |
 
 ---
 
@@ -116,6 +133,7 @@ Integration tests were executed using `pg-mem` (an in-memory PostgreSQL engine) 
  RUN  v3.2.7 D:/CareCircle
 
  ✓ tests/timezoneAndScheduling.test.ts (9 tests)
+ ✓ tests/nodeServerSecurityAndScheduler.test.ts (8 tests)
  ✓ tests/databaseSecurityIntegration.test.ts (6 tests)
  ✓ tests/assistedCareAndIntegrity.test.ts (5 tests)
  ✓ tests/storageAdapter.test.ts (5 tests)
@@ -127,9 +145,9 @@ Integration tests were executed using `pg-mem` (an in-memory PostgreSQL engine) 
  ✓ tests/roleNavigationAndAccessibility.test.tsx (9 tests)
  ✓ tests/analytics.test.ts (2 tests)
 
- Test Files  11 passed (11)
-      Tests  56 passed (56)
-   Duration  14.46s
+ Test Files  12 passed (12)
+      Tests  64 passed (64)
+   Duration  23.49s
 ```
 
 ---

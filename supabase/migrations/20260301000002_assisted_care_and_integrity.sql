@@ -7,7 +7,7 @@
 ALTER TABLE public.care_profiles
     ADD COLUMN IF NOT EXISTS assistance_level TEXT NOT NULL DEFAULT 'independent'
         CHECK (assistance_level IN ('independent', 'needs_assistance', 'caregiver_managed')),
-    ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/Los_Angeles';
+    ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
 
 -- 2. Extend dose_logs with Provenance, Concrete Timestamps, Follow-up State & Append-Only Corrections
 ALTER TABLE public.dose_logs
@@ -110,11 +110,15 @@ BEGIN
     END IF;
 
     -- 4. Calculate Scheduled Timestamp with Profile Timezone
+    IF v_care_profile.timezone IS NULL OR TRIM(v_care_profile.timezone) = '' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Care profile is missing a configured IANA timezone.');
+    END IF;
+
     BEGIN
         v_scheduled_tz := (p_scheduled_date::TEXT || ' ' || p_scheduled_time::TEXT)::TIMESTAMP
-                          AT TIME ZONE COALESCE(v_care_profile.timezone, 'America/Los_Angeles');
+                          AT TIME ZONE v_care_profile.timezone;
     EXCEPTION WHEN OTHERS THEN
-        v_scheduled_tz := (p_scheduled_date::TEXT || ' ' || p_scheduled_time::TEXT)::TIMESTAMPTZ;
+        RETURN jsonb_build_object('success', false, 'error', 'Invalid timezone configuration: ' || v_care_profile.timezone);
     END;
 
     -- 5. Window Validation: Prevent future dose confirmation (unless documenting a past skipped exception)
@@ -143,11 +147,7 @@ BEGIN
 
     -- 7. Handle Append-Only Correction vs Normal Confirmation
     IF p_is_correction AND p_correcting_log_id IS NOT NULL THEN
-        -- Mark previous log as corrected
-        UPDATE public.dose_logs
-        SET is_corrected = TRUE,
-            updated_at = NOW()
-        WHERE id = p_correcting_log_id;
+        -- Target confirmed log is strictly immutable; do not update in-place
 
         -- Insert new append-only corrected event
         INSERT INTO public.dose_logs (

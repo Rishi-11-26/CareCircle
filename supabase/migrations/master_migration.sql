@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     role TEXT NOT NULL DEFAULT 'elderly' CHECK (role IN ('elderly', 'family', 'caretaker')),
     avatar_url TEXT,
     emergency_contact TEXT,
-    timezone TEXT NOT NULL DEFAULT 'America/Los_Angeles',
+    timezone TEXT NOT NULL DEFAULT 'UTC',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS public.care_profiles (
     medical_notes TEXT,
     assistance_level TEXT NOT NULL DEFAULT 'independent'
         CHECK (assistance_level IN ('independent', 'needs_assistance', 'caregiver_managed')),
-    timezone TEXT NOT NULL DEFAULT 'America/Los_Angeles',
+    timezone TEXT NOT NULL CHECK (timezone IS NOT NULL AND length(trim(timezone)) > 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -242,6 +242,17 @@ CREATE INDEX IF NOT EXISTS idx_notifications_status ON public.notifications(care
 CREATE INDEX IF NOT EXISTS idx_activity_logs_profile ON public.activity_logs(care_profile_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_invitations_code ON public.invitations(invite_code_hash);
 CREATE INDEX IF NOT EXISTS idx_invite_attempts_user ON public.invitation_redemption_attempts(user_id, attempted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rate_limits_user ON public.invitation_rate_limits(user_id);
+
+-- Enforce single correction per confirmed dose event
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dose_logs_single_correction 
+    ON public.dose_logs (correction_of_id) 
+    WHERE (correction_of_id IS NOT NULL);
+
+-- Enforce atomic single notification per scheduled dose event under concurrency
+CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_escalation_dose 
+    ON public.notifications (care_profile_id, category, (metadata->>'dose_identity'))
+    WHERE (category IN ('upcoming_dose', 'unconfirmed_escalation'));
 
 -- ============================================================================
 -- 4. SECURITY DEFINER HELPER FUNCTIONS FOR AUTHORIZATION

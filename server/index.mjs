@@ -40,11 +40,14 @@ const MIME_TYPES = {
 // IANA timezone alignment, and Resend transactional email alerts.
 // ----------------------------------------------------------------------------
 async function runEscalationCycle() {
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseUrl || !serviceKey) {
-    return { skipped: true, reason: 'Database environment variables not configured in server environment.' };
+    return {
+      success: false,
+      error: 'Server misconfiguration: SUPABASE_SERVICE_ROLE_KEY is strictly required for administrative scheduler operations.',
+    };
   }
 
   const result = {
@@ -134,7 +137,7 @@ async function runEscalationCycle() {
         );
         const existing = await checkNotif.json();
         if (!Array.isArray(existing) || existing.length === 0) {
-          await fetch(`${supabaseUrl}/rest/v1/notifications`, {
+          const postRes = await fetch(`${supabaseUrl}/rest/v1/notifications`, {
             method: 'POST',
             headers: {
               apikey: serviceKey,
@@ -152,7 +155,9 @@ async function runEscalationCycle() {
               metadata: { dose_identity: doseIdentity, scheduled_time: schedule.time_of_day },
             }),
           });
-          result.upcomingRemindersSent++;
+          if (postRes.ok) {
+            result.upcomingRemindersSent++;
+          }
         }
       }
 
@@ -169,75 +174,92 @@ async function runEscalationCycle() {
           continue;
         }
 
-        // Idempotency: check if escalation notification was already created for this dose
-        const checkEsc = await fetch(
-          `${supabaseUrl}/rest/v1/notifications?care_profile_id=eq.${careProfile.id}&category=eq.unconfirmed_escalation&metadata->>dose_identity=eq.${doseIdentity}&select=id`,
-          { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }
-        );
-        const existingEsc = await checkEsc.json();
-        if (Array.isArray(existingEsc) && existingEsc.length > 0) {
-          // Already escalated and tracked; prevent duplicate notifications across scheduler runs
-          continue;
-        }
-
         const personName = careProfile.preferred_name || careProfile.full_name;
         const alertTitle = `Unconfirmed Dose: ${medication.name} (${medication.dosage})`;
         const alertMsg = `${personName}'s scheduled ${medication.name} (${medication.dosage}) at ${schedule.time_of_day.slice(0, 5)} has not been confirmed after ${diffMinutes} minutes.`;
 
-        // Create persistent escalation notification
-        const notifRes = await fetch(`${supabaseUrl}/rest/v1/notifications`, {
-          method: 'POST',
-          headers: {
-            apikey: serviceKey,
-            Authorization: `Bearer ${serviceKey}`,
-            'Content-Type': 'application/json',
-            Prefer: 'return=representation',
-          },
-          body: JSON.stringify({
-            care_profile_id: careProfile.id,
-            category: 'unconfirmed_escalation',
-            title: alertTitle,
-            message: alertMsg,
-            priority: 'urgent',
-            status: 'pending',
-            email_status: process.env.RESEND_API_KEY ? 'pending' : 'none',
-            metadata: {
-              dose_identity: doseIdentity,
-              medication_id: medication.id,
-              medication_name: medication.name,
-              dosage: medication.dosage,
-              scheduled_time: schedule.time_of_day,
-              scheduled_date: localParts.dateStr,
-              elapsed_minutes: diffMinutes,
+        // Check if escalation notification already exists
+        const checkEsc = await fetch(
+          `${supabaseUrl}/rest/v1/notifications?care_profile_id=eq.${careProfile.id}&category=eq.unconfirmed_escalation&metadata->>dose_identity=eq.${doseIdentity}&select=id,status,email_status`,
+          { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }
+        );
+        const existingEsc = await checkEsc.json();
+        let notifId = null;
+        let shouldDispatchEmail = false;
+
+        if (Array.isArray(existingEsc) && existingEsc.length > 0) {
+          const existingNotif = existingEsc[0];
+          notifId = existingNotif.id;
+          // If already resolved or acknowledged, or email sent successfully, do not resend
+          if (existingNotif.status === 'acknowledged' || existingNotif.status === 'resolved' || existingNotif.email_status === 'sent') {
+            continue;
+          }
+          // If previously failed or pending, retry email delivery without creating duplicate notification record
+          if (existingNotif.email_status === 'failed' || existingNotif.email_status === 'pending') {
+            shouldDispatchEmail = true;
+          }
+        } else {
+          // Atomic Insert with deduplication index guard
+          const notifRes = await fetch(`${supabaseUrl}/rest/v1/notifications`, {
+            method: 'POST',
+            headers: {
+              apikey: serviceKey,
+              Authorization: `Bearer ${serviceKey}`,
+              'Content-Type': 'application/json',
+              Prefer: 'return=representation',
             },
-          }),
-        });
+            body: JSON.stringify({
+              care_profile_id: careProfile.id,
+              category: 'unconfirmed_escalation',
+              title: alertTitle,
+              message: alertMsg,
+              priority: 'urgent',
+              status: 'pending',
+              email_status: process.env.RESEND_API_KEY ? 'pending' : 'none',
+              metadata: {
+                dose_identity: doseIdentity,
+                medication_id: medication.id,
+                medication_name: medication.name,
+                dosage: medication.dosage,
+                scheduled_time: schedule.time_of_day,
+                scheduled_date: localParts.dateStr,
+                elapsed_minutes: diffMinutes,
+              },
+            }),
+          });
 
-        const createdNotifs = await notifRes.json();
-        const notifId = Array.isArray(createdNotifs) && createdNotifs[0]?.id;
-        result.escalationsTriggered++;
+          if (notifRes.status === 409) {
+            // Concurrent scheduler execution already inserted notification; avoid duplicate
+            continue;
+          }
 
-        // Log to immutable activity timeline
-        await fetch(`${supabaseUrl}/rest/v1/activity_logs`, {
-          method: 'POST',
-          headers: {
-            apikey: serviceKey,
-            Authorization: `Bearer ${serviceKey}`,
-            'Content-Type': 'application/json',
-            Prefer: 'return=minimal',
-          },
-          body: JSON.stringify({
-            care_profile_id: careProfile.id,
-            actor_name: 'Care Intelligence System',
-            actor_role: 'system',
-            activity_type: 'dose_unconfirmed_escalated',
-            description: `Automated escalation triggered for ${personName}'s ${medication.name} (${schedule.time_of_day.slice(0, 5)}).`,
-            metadata: { dose_identity: doseIdentity, notification_id: notifId },
-          }),
-        });
+          const createdNotifs = await notifRes.json();
+          notifId = Array.isArray(createdNotifs) && createdNotifs[0]?.id;
+          result.escalationsTriggered++;
+          shouldDispatchEmail = true;
+
+          // Log to immutable activity timeline
+          await fetch(`${supabaseUrl}/rest/v1/activity_logs`, {
+            method: 'POST',
+            headers: {
+              apikey: serviceKey,
+              Authorization: `Bearer ${serviceKey}`,
+              'Content-Type': 'application/json',
+              Prefer: 'return=minimal',
+            },
+            body: JSON.stringify({
+              care_profile_id: careProfile.id,
+              actor_name: 'Care Intelligence System',
+              actor_role: 'system',
+              activity_type: 'dose_unconfirmed_escalated',
+              description: `Automated escalation triggered for ${personName}'s ${medication.name} (${schedule.time_of_day.slice(0, 5)}).`,
+              metadata: { dose_identity: doseIdentity, notification_id: notifId },
+            }),
+          });
+        }
 
         // Dispatch Resend Email Alerts to subscribed Care Circle members
-        if (process.env.RESEND_API_KEY) {
+        if (shouldDispatchEmail && process.env.RESEND_API_KEY) {
           const membersRes = await fetch(
             `${supabaseUrl}/rest/v1/care_members?care_profile_id=eq.${careProfile.id}&status=eq.active&receive_email_alerts=eq.true&select=user_id,role,profiles(email,full_name)`,
             { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }
@@ -378,7 +400,7 @@ const server = http.createServer(async (req, res) => {
       timestamp: new Date().toISOString(),
       database: {
         target: process.env.VITE_SUPABASE_URL || 'https://irkbphurzdhghptwfemz.supabase.co',
-        configured: Boolean(process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL),
+        configured: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
       },
       emailService: {
         configured: Boolean(process.env.RESEND_API_KEY),
@@ -394,41 +416,41 @@ const server = http.createServer(async (req, res) => {
   // 2. Scheduler Trigger Endpoint: /api/scheduler/run-escalations
   if (pathname === '/api/scheduler/run-escalations' && req.method === 'POST') {
     const cronSecret = process.env.CRON_SECRET;
-    const providedSecret = req.headers['x-cron-secret'] || (req.headers.authorization || '').replace('Bearer ', '');
 
-    if (cronSecret && providedSecret !== cronSecret) {
+    // Fail closed if CRON_SECRET is not configured on the server
+    if (!cronSecret || cronSecret.trim() === '') {
+      res.writeHead(503, { ...corsHeaders, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Scheduler trigger endpoint disabled: CRON_SECRET is not configured on the server.' }));
+      return;
+    }
+
+    const providedSecret = req.headers['x-cron-secret'] || (req.headers.authorization || '').replace('Bearer ', '').trim();
+
+    if (!providedSecret || providedSecret !== cronSecret) {
       res.writeHead(401, { ...corsHeaders, 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: false, error: 'Unauthorized: Invalid CRON_SECRET.' }));
+      res.end(JSON.stringify({ success: false, error: 'Unauthorized: Invalid or missing CRON_SECRET.' }));
       return;
     }
 
     const runResult = await runEscalationCycle();
+    if (!runResult.success) {
+      res.writeHead(500, { ...corsHeaders, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, timestamp: new Date().toISOString(), error: runResult.error || 'Scheduler cycle failed', details: runResult }));
+      return;
+    }
+
     res.writeHead(200, { ...corsHeaders, 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: true, timestamp: new Date().toISOString(), result: runResult }));
     return;
   }
 
-  // 3. Email Dispatch Endpoint: /api/send-email
-  if (pathname === '/api/send-email' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', async () => {
-      try {
-        const payload = JSON.parse(body);
-        if (!payload.to || !payload.subject || !payload.html) {
-          res.writeHead(400, { ...corsHeaders, 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: 'Missing required fields: to, subject, or html.' }));
-          return;
-        }
-
-        const emailResult = await sendResendEmail(payload);
-        res.writeHead(emailResult.success ? 200 : 500, { ...corsHeaders, 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(emailResult));
-      } catch (err) {
-        res.writeHead(400, { ...corsHeaders, 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'Invalid JSON payload: ' + err.message }));
-      }
-    });
+  // 3. Reject unauthenticated or arbitrary client email dispatch attempts (Anti-abuse guard)
+  if (pathname === '/api/send-email') {
+    res.writeHead(403, { ...corsHeaders, 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: false,
+      error: 'Forbidden: Direct client email transmission is disabled. All notifications and alerts are managed server-side by the background scheduler.',
+    }));
     return;
   }
 

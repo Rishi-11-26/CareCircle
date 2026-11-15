@@ -2,7 +2,7 @@
 
 > **Platform:** Elderly Care & Medication Management Platform  
 > **Repository:** [https://github.com/Rishi-11-26/CareCircle](https://github.com/Rishi-11-26/CareCircle)  
-> **Production Status:** Hardened Integrated Web Service | Dedicated Supabase PostgreSQL Schema | 56/56 Automated & Database Integration Tests Passing (100%)
+> **Production Status:** Hardened Integrated Web Service | Dedicated Supabase PostgreSQL Schema | 64/64 Automated, Integration & Database Security Tests Passing (100% across 12 Test Suites)
 
 ---
 
@@ -217,6 +217,14 @@ erDiagram
 - `REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC` removes default public execution rights.
 - Explicit `GRANT EXECUTE` statements authorize only `authenticated` and `service_role` roles.
 
+### E. Server Security, Fail-Closed Scheduler Authentication & Email Retry Pipeline
+- **Fail-Closed Cron Authorization:** The escalation webhook `/api/scheduler/run-escalations` fails closed with HTTP 503 Service Unavailable when `CRON_SECRET` is not configured, returns HTTP 401 Unauthorized when provided credentials are invalid, and returns HTTP 500 when scheduler execution encounters an error.
+- **Direct Client Email Relay Prevention:** `/api/send-email` strictly returns HTTP 403 Forbidden to reject direct unauthenticated client dispatches, preventing open-relay abuse. All urgent caregiver alerts are orchestrated server-side by the background escalation engine.
+- **Service-Role Key Strict Requirement:** `runEscalationCycle` strictly requires `SUPABASE_SERVICE_ROLE_KEY` to run background queries across care profiles; it fails closed and never falls back to `VITE_SUPABASE_ANON_KEY`.
+- **Atomic Scheduler Concurrency & Notification Deduplication:** Unique partial index `uq_notifications_escalation_dose ON notifications (care_profile_id, category, (metadata->>'dose_identity')) WHERE (category IN ('upcoming_dose', 'unconfirmed_escalation'))` guarantees that concurrent scheduler workers can never create duplicate escalation notifications.
+- **Transient Email Failure & Retry Pipeline:** When external email delivery fails (e.g., transient network timeout connecting to Resend), the record is marked `email_status = 'failed'` with the captured error string. Subsequent scheduler iterations re-select unacknowledged notifications with `email_status IN ('pending', 'failed')` to retry delivery without creating duplicate notification rows.
+- **Single Canonical Database Migration Sequence:** `supabase/migrations/master_migration.sql` serves as the complete, self-contained clean installation script for the entire database. Incremental versioned migrations (`20260301000000` through `20260301000003`) are fully reconciled with identical immutability, rate limiting, and security constraints.
+
 ---
 
 ## 5. Role-Based Experience & Accessibility Design Principles
@@ -243,7 +251,7 @@ CareCircle applies **WCAG 2.2 AA-inspired high-accessibility design principles**
 
 ## 6. Comprehensive Verification & Test Suite
 
-All 56 unit, integration, and database-level tests across 11 suites pass with a 100% success rate:
+All 64 unit, integration, and database-level tests across 12 suites pass with a 100% success rate:
 
 ```bash
 npm test -- --run
@@ -254,6 +262,7 @@ npm test -- --run
 | `tests/crypto.test.ts` | Passcode entropy, charset validation, SHA-256 hashing | 4 | **PASS** |
 | `tests/timezoneAndScheduling.test.ts` | Multi-timezone formatting, confirmation windows, day boundaries | 9 | **PASS** |
 | `tests/databaseSecurityIntegration.test.ts` | Real PostgreSQL engine (pg-mem): confirmed immutability, append-only view, concurrency lockout | 6 | **PASS** |
+| `tests/nodeServerSecurityAndScheduler.test.ts` | Server security: fail-closed CRON_SECRET, /api/send-email 403, scheduler concurrency deduplication, email retry, clean DDL | 8 | **PASS** |
 | `tests/assistedCareAndIntegrity.test.ts` | Assisted care modes, source attribution, audit logging | 5 | **PASS** |
 | `tests/securityRemediation.test.ts` | Brute-force lockout, dose authorization, immutability, secrets | 8 | **PASS** |
 | `tests/storageAdapter.test.ts` | Local/remote persistence, idempotency, state transitions | 5 | **PASS** |
@@ -262,7 +271,7 @@ npm test -- --run
 | `tests/analytics.test.ts` | Adherence percentage math, streak counting, correction handling | 2 | **PASS** |
 | `tests/workflows.test.tsx` | React UI flows, dose confirmation cards, modal interactions | 9 | **PASS** |
 | `tests/roleNavigationAndAccessibility.test.tsx` | 4-tab role separation, Large Print Mode state, Call Family | 9 | **PASS** |
-| **TOTAL** | **11 Distinct Test Suites** | **56 Tests** | **100% PASS** |
+| **TOTAL** | **12 Distinct Test Suites** | **64 Tests** | **100% PASS** |
 
 ### Production Build Verification
 Production compilation via Vite 6 and TypeScript 5.7 succeeds with zero warnings:
